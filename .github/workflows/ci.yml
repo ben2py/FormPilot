@@ -17,10 +17,11 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
       - name: Install Python package
         run: pip install -e .
-      - name: Run static and unit checks
-        run: npm run check
+      - name: Run unit tests
+        run: python -m unittest discover -s tests_python -v
+      - name: Compile Python package
+        run: python -m compileall -q formpilot
+      - name: Check CLI entry point
+        run: formpilot --help

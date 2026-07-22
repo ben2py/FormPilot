@@ -2,12 +2,7 @@
 
 ## Repository boundaries
 
-FormPilot contains two deliberately separated implementations:
-
-1. `formpilot/` is the production path: a Python LLM agent using the Responses API and Playwright.
-2. `src/`, `manifest.json`, and `tests/` are a dependency-free Chrome extension prototype retained for UI and DOM-scanning experiments.
-
-The extension does not start or control the Python agent. New product behavior belongs in `formpilot/` unless the change is explicitly about the prototype.
+`formpilot/` is the production implementation: a Python LLM agent using the Responses API and Playwright. The repository intentionally contains no independent browser-extension implementation, so model orchestration, browser execution, safety policy, and tests share one versioned Python code path.
 
 ## Runtime flow
 
@@ -67,5 +62,3 @@ The browser adapter can alternatively attach over CDP when `FORMPILOT_CDP_URL` i
 
 - `tests_python/`: Agent orchestration, privacy filtering, approval behavior, and fake-browser tests.
 - `scripts/smoke_python_browser.py`: real Chromium scan/fill/dynamic-select test against `demo/`.
-- `tests/`: legacy extension matching tests.
-- `scripts/validate-extension.js`: extension manifest and JavaScript syntax validation.

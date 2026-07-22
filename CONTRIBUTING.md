@@ -18,7 +18,8 @@ Never commit `.env`, `profile.json`, `.formpilot/`, browser profiles, screenshot
 Run before every commit:
 
 ```bash
-npm run check
+python3 -m unittest discover -s tests_python -v
+python3 -m compileall -q formpilot
 .venv/bin/python scripts/smoke_python_browser.py
 git diff --check
 ```
@@ -28,7 +29,6 @@ The smoke test is local-only and requires the Playwright Chromium download. CI r
 ## Change placement
 
 - Python Agent behavior belongs under `formpilot/` with tests in `tests_python/`.
-- Changes under `src/` apply only to the optional extension prototype.
 - Tool schemas must use `additionalProperties: false` and keep all properties explicit.
 - New side-effecting tools require an approval policy and denial/replay tests.
 - Any change that sends additional page/profile data to the model requires a privacy test.

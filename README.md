@@ -2,8 +2,6 @@
 
 FormPilot 是一个由 LLM 自主决策并调用浏览器工具的网页填表 Agent。Python 进程负责多轮 Agent 循环，模型根据实时网页结构决定下一项工具调用；Playwright 工具只执行受约束的扫描、填写、验证和点击操作。
 
-此前的浏览器扩展代码仍保留为界面原型，但现在的主入口是 `formpilot` Python 包。
-
 ## Agent 如何运行
 
 每一轮中，模型可以自主选择以下工具：
@@ -90,7 +88,8 @@ formpilot \
 完整静态与单元测试：
 
 ```bash
-npm run check
+python3 -m unittest discover -s tests_python -v
+python3 -m compileall -q formpilot
 ```
 
 真实 Playwright 浏览器冒烟测试：
@@ -111,7 +110,8 @@ npm run check
 - `formpilot/profile.py`：本地资料库及脱敏目录；
 - `formpilot/cli.py`：命令行入口；
 - `tests_python/`：Python Agent 与安全测试；
-- `src/`：早期浏览器扩展原型。
+- `scripts/`：真实浏览器冒烟测试；
+- `demo/`：只在本地使用的动态报名测试页。
 
 更完整的模块边界和数据流见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全边界见 [SECURITY.md](SECURITY.md)。
 
