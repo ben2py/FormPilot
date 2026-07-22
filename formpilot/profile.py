@@ -22,6 +22,10 @@ PROFILE_LABELS = {
     "education.major": "所学专业",
     "education.degree": "学位",
     "education.graduation_date": "毕业日期",
+    "education.enrollment_date": "入学日期",
+    "origin.province": "籍贯省份",
+    "origin.city": "籍贯城市",
+    "origin.district": "籍贯区县",
     "application.project": "招生项目",
     "application.batch": "招生批次",
     "application.mode": "招生方式",
@@ -29,10 +33,14 @@ PROFILE_LABELS = {
 }
 
 HIGH_RISK_PATHS = {
+    "identity.birth_date",
     "identity.document_number",
     "contact.mobile",
     "contact.email",
     "contact.address",
+    "origin.province",
+    "origin.city",
+    "origin.district",
 }
 
 

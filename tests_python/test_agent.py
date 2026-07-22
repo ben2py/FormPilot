@@ -81,8 +81,12 @@ class FakeBrowser:
             "field-name": "",
             "field-id": "310101199001011234",
             "field-captcha": "9876",
+            "field-origin": "",
+            "field-date": "",
         }
         self.clicked: list[str] = []
+        self.last_cascade = None
+        self.last_date = None
 
     def snapshot(self):
         return {
@@ -92,6 +96,8 @@ class FakeBrowser:
                 {"field_id": "field-name", "tag": "input", "type": "text", "id": "xm", "name": "xm", "label": "姓名", "placeholder": "", "disabled": False, "read_only": False, "current_value": self.values["field-name"], "options": None},
                 {"field_id": "field-id", "tag": "input", "type": "text", "id": "zjhm", "name": "zjhm", "label": "证件号码", "placeholder": "", "disabled": False, "read_only": False, "current_value": self.values["field-id"], "options": None},
                 {"field_id": "field-captcha", "tag": "input", "type": "text", "id": "captcha", "name": "captcha", "label": "验证码", "placeholder": "", "disabled": False, "read_only": False, "current_value": self.values["field-captcha"], "options": None},
+                {"field_id": "field-origin", "tag": "input", "type": "text", "id": "origin", "name": "origin", "label": "籍贯", "placeholder": "", "disabled": False, "read_only": True, "current_value": self.values["field-origin"], "options": None},
+                {"field_id": "field-date", "tag": "input", "type": "text", "id": "enrollment", "name": "enrollment", "label": "入学时间", "placeholder": "", "disabled": False, "read_only": True, "current_value": self.values["field-date"], "options": None},
             ],
             "controls": [{"control_id": "submit", "label": "提交报名", "type": "submit", "disabled": False}],
             "feedback": [],
@@ -115,6 +121,28 @@ class FakeBrowser:
     async def click(self, control_id):
         self.clicked.append(control_id)
         return {"ok": True, "label": "提交报名"}
+
+    async def inspect_widget(self):
+        return {"widgets": [], "options": [], "controls": []}
+
+    async def open_field(self, field_id):
+        return {"ok": True, "field_id": field_id, "widgets": [], "options": [], "controls": []}
+
+    async def click_widget_option(self, option_id):
+        return {"ok": True, "option_id": option_id}
+
+    async def click_widget_control(self, widget_control_id):
+        return {"ok": True, "widget_control_id": widget_control_id}
+
+    async def select_cascade(self, field_id, path):
+        self.last_cascade = list(path)
+        self.values[field_id] = "/".join(path)
+        return {"ok": True, "field_id": field_id, "selected_levels": len(path), "has_value": True}
+
+    async def set_date(self, field_id, value):
+        self.last_date = value
+        self.values[field_id] = str(value)
+        return {"ok": True, "field_id": field_id, "mode": "calendar", "has_value": True}
 
 
 class AgentLoopTests(unittest.IsolatedAsyncioTestCase):
@@ -182,6 +210,8 @@ class FormToolSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.profile = ProfileStore({
             "identity": {"full_name_zh": "张三", "document_number": "310101199001011234"},
             "contact": {"mobile": "13800138000"},
+            "education": {"enrollment_date": "2022-03-01"},
+            "origin": {"province": "浙江省", "city": "温州市", "district": "瑞安市"},
         })
 
     async def test_inspection_never_exposes_existing_values(self):
@@ -227,6 +257,35 @@ class FormToolSafetyTests(unittest.IsolatedAsyncioTestCase):
         clicked = await tools.click_control("submit", approval["approval_id"])
         self.assertTrue(clicked["ok"])
         self.assertEqual(self.browser.clicked, ["submit"])
+
+    async def test_cascade_values_stay_local_and_require_location_approval(self):
+        tools = FormPilotTools(self.browser, self.profile, confirm=lambda _: True)
+        paths = ["origin.province", "origin.city", "origin.district"]
+        first = await tools.select_cascade_from_profile("field-origin", paths, None)
+        self.assertTrue(first["confirmation_required"])
+        approval = await tools.request_user_confirmation(first["target"], first["summary"])
+        result = await tools.select_cascade_from_profile("field-origin", paths, approval["approval_id"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.browser.last_cascade, ["浙江省", "温州市", "瑞安市"])
+        rendered = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn("浙江省", rendered)
+        self.assertNotIn("温州市", rendered)
+        self.assertNotIn("瑞安市", rendered)
+
+    async def test_custom_date_uses_local_profile_value(self):
+        tools = FormPilotTools(self.browser, self.profile)
+        result = await tools.set_date_from_profile("field-date", "education.enrollment_date", None)
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.browser.last_date, "2022-03-01")
+        self.assertNotIn("2022-03-01", json.dumps(result, ensure_ascii=False))
+
+    async def test_registry_exposes_complex_widget_tools(self):
+        tools = FormPilotTools(self.browser, self.profile)
+        names = {schema["name"] for schema in tools.registry().schemas()}
+        self.assertTrue({
+            "open_field", "inspect_widget", "click_widget_option", "click_widget_control",
+            "select_cascade_from_profile", "set_date_from_profile",
+        }.issubset(names))
 
 
 class DeepSeekChatCompatibilityTests(unittest.IsolatedAsyncioTestCase):

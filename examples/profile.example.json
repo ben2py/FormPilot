@@ -18,7 +18,13 @@
     "school": "示例大学",
     "major": "计算机科学与技术",
     "degree": "工学学士",
+    "enrollment_date": "2022-03-01",
     "graduation_date": "2026-06-30"
+  },
+  "origin": {
+    "province": "浙江省",
+    "city": "温州市",
+    "district": "瑞安市"
   },
   "application": {
     "project": "博士研究生招生",

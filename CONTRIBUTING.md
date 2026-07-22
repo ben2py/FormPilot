@@ -32,6 +32,7 @@ The smoke test is local-only and requires the Playwright Chromium download. CI r
 - Tool schemas must use `additionalProperties: false` and keep all properties explicit.
 - New side-effecting tools require an approval policy and denial/replay tests.
 - Any change that sends additional page/profile data to the model requires a privacy test.
+- New widget adapters must re-inspect after state transitions, reject ambiguous matches, and include a real-browser case in `demo/` and `scripts/smoke_python_browser.py`.
 
 ## Commit style
 

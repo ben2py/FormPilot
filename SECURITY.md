@@ -17,5 +17,6 @@ Do not include real API keys, passwords, OTPs, identification numbers, browser p
 - Secret fields must remain blocked even if the model explicitly requests a fill.
 - External side effects require a target-bound, single-use approval.
 - The model must not receive arbitrary code execution in the page context.
+- Cascader and date tools must remain bounded and stop on ambiguous options instead of choosing by position.
 
 Run `python3 -m unittest discover -s tests_python -v` after security-related changes. The tests in `tests_python/test_agent.py` enforce the principal invariants.
