@@ -45,6 +45,7 @@ def load_env_file(path: str | Path = ".env", *, override: bool = False) -> bool:
 class AgentConfig:
     model: str = "gpt-5.6-terra"
     reasoning_effort: str = "medium"
+    api_mode: str = "auto"
     max_steps: int = 30
     headless: bool = False
     browser_profile_dir: Path = Path(".formpilot/browser-profile")
@@ -56,6 +57,7 @@ class AgentConfig:
         return cls(
             model=os.getenv("FORMPILOT_MODEL", "gpt-5.6-terra"),
             reasoning_effort=os.getenv("FORMPILOT_REASONING_EFFORT", "medium"),
+            api_mode=os.getenv("FORMPILOT_API_MODE", "auto"),
             max_steps=int(os.getenv("FORMPILOT_MAX_STEPS", "30")),
             headless=os.getenv("FORMPILOT_HEADLESS", "0") == "1",
             browser_profile_dir=Path(os.getenv("FORMPILOT_BROWSER_PROFILE", ".formpilot/browser-profile")),

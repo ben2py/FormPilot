@@ -9,7 +9,13 @@ from typing import Any
 
 from formpilot.agent import FormPilotAgent
 from formpilot.config import load_env_file
-from formpilot.model import ModelTurn, ToolCall
+from formpilot.model import (
+    ModelTurn,
+    OpenAIChatCompletionsModel,
+    ToolCall,
+    create_model,
+    resolve_api_mode,
+)
 from formpilot.policy import ApprovalPolicy
 from formpilot.profile import ProfileStore
 from formpilot.tools.base import Tool, ToolRegistry
@@ -24,6 +30,48 @@ class ScriptedModel:
     async def complete(self, *, input_items, tools, instructions):
         self.inputs.append(list(input_items))
         return self.turns.pop(0)
+
+
+class _FakeFunction:
+    def __init__(self, name: str, arguments: str) -> None:
+        self.name = name
+        self.arguments = arguments
+
+
+class _FakeToolCall:
+    def __init__(self, call_id: str, name: str, arguments: str) -> None:
+        self.id = call_id
+        self.type = "function"
+        self.function = _FakeFunction(name, arguments)
+
+
+class _FakeMessage:
+    def __init__(self, *, content=None, reasoning_content=None, tool_calls=None) -> None:
+        self.content = content
+        self.reasoning_content = reasoning_content
+        self.tool_calls = tool_calls
+
+
+class _FakeChoice:
+    def __init__(self, message: _FakeMessage) -> None:
+        self.message = message
+
+
+class _FakeResponse:
+    def __init__(self, message: _FakeMessage) -> None:
+        self.choices = [_FakeChoice(message)]
+
+
+class ScriptedChatClient:
+    def __init__(self, messages: list[_FakeMessage]) -> None:
+        self._messages = list(messages)
+        self.calls: list[dict[str, Any]] = []
+        self.chat = self
+        self.completions = self
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeResponse(self._messages.pop(0))
 
 
 class FakeBrowser:
@@ -179,6 +227,64 @@ class FormToolSafetyTests(unittest.IsolatedAsyncioTestCase):
         clicked = await tools.click_control("submit", approval["approval_id"])
         self.assertTrue(clicked["ok"])
         self.assertEqual(self.browser.clicked, ["submit"])
+
+
+class DeepSeekChatCompatibilityTests(unittest.IsolatedAsyncioTestCase):
+    def test_auto_mode_selects_chat_for_deepseek(self):
+        self.assertEqual(resolve_api_mode("deepseek-v4-flash"), "chat")
+        self.assertEqual(
+            resolve_api_mode("gpt-5.6-terra", base_url="https://api.deepseek.com"),
+            "chat",
+        )
+        self.assertEqual(resolve_api_mode("gpt-5.6-terra"), "responses")
+        self.assertEqual(resolve_api_mode("deepseek-v4-pro", api_mode="responses"), "responses")
+        self.assertIsInstance(create_model("deepseek-v4-flash", client=object()), OpenAIChatCompletionsModel)
+
+    async def test_chat_adapter_echoes_reasoning_content_across_tool_turns(self):
+        client = ScriptedChatClient(
+            [
+                _FakeMessage(
+                    content="",
+                    reasoning_content="先检查页面字段",
+                    tool_calls=[_FakeToolCall("call_1", "inspect_page", "{}")],
+                ),
+                _FakeMessage(content="页面已检查，尚未提交。", reasoning_content="可以结束"),
+            ]
+        )
+        model = OpenAIChatCompletionsModel("deepseek-v4-flash", "medium", client=client)
+
+        registry = ToolRegistry()
+
+        async def inspect_page():
+            return {"ok": True, "fields": []}
+
+        registry.register(
+            Tool(
+                "inspect_page",
+                "inspect",
+                {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+                inspect_page,
+            )
+        )
+
+        result = await FormPilotAgent(model, registry, max_steps=5).run("填写报名表")
+        self.assertEqual(result.steps, 2)
+        self.assertIn("尚未提交", result.text)
+        self.assertEqual(len(client.calls), 2)
+
+        first = client.calls[0]
+        self.assertEqual(first["model"], "deepseek-v4-flash")
+        self.assertEqual(first["reasoning_effort"], "high")
+        self.assertEqual(first["extra_body"], {"thinking": {"type": "enabled"}})
+        self.assertEqual(first["tools"][0]["function"]["name"], "inspect_page")
+
+        second_messages = client.calls[1]["messages"]
+        assistant = next(item for item in second_messages if item.get("role") == "assistant")
+        self.assertEqual(assistant["reasoning_content"], "先检查页面字段")
+        self.assertEqual(assistant["tool_calls"][0]["id"], "call_1")
+        tool_msg = next(item for item in second_messages if item.get("role") == "tool")
+        self.assertEqual(tool_msg["tool_call_id"], "call_1")
+        self.assertEqual(json.loads(tool_msg["content"]), {"ok": True, "fields": []})
 
 
 if __name__ == "__main__":

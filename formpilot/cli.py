@@ -9,7 +9,7 @@ from pathlib import Path
 from .agent import FormPilotAgent
 from .browser import PlaywrightFormBrowser
 from .config import AgentConfig, load_env_file
-from .model import OpenAIResponsesModel
+from .model import create_model
 from .profile import ProfileStore
 from .tools.form_tools import FormPilotTools
 
@@ -23,8 +23,13 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--profile", default="profile.json", help="本地资料 JSON")
     result.add_argument("--env-file", default=".env", help="环境变量文件，默认 .env")
     result.add_argument("--goal", default=DEFAULT_GOAL, help="交给 Agent 的目标")
-    result.add_argument("--model", help="Responses API 模型，默认读取 FORMPILOT_MODEL")
+    result.add_argument("--model", help="模型名，默认读取 FORMPILOT_MODEL")
     result.add_argument("--reasoning-effort", choices=["none", "low", "medium", "high", "xhigh", "max"])
+    result.add_argument(
+        "--api-mode",
+        choices=["auto", "responses", "chat"],
+        help="API 协议：auto 按模型/BASE_URL 推断；DeepSeek 使用 chat",
+    )
     result.add_argument("--headless", action="store_true", help="无头浏览器；需要人工登录/验证码时不要开启")
     result.add_argument("--cdp-url", help="连接已开启远程调试的 Chromium，例如 http://127.0.0.1:9222")
     result.add_argument("--max-steps", type=int, help="最大模型决策轮数")
@@ -51,6 +56,8 @@ async def run(args: argparse.Namespace) -> int:
         config.model = args.model
     if args.reasoning_effort:
         config.reasoning_effort = args.reasoning_effort
+    if args.api_mode:
+        config.api_mode = args.api_mode
     if args.max_steps:
         config.max_steps = args.max_steps
     if args.headless:
@@ -70,7 +77,7 @@ async def run(args: argparse.Namespace) -> int:
         await browser.start(args.url)
         profile = ProfileStore.load(profile_path)
         form_tools = FormPilotTools(browser, profile)
-        model = OpenAIResponsesModel(config.model, config.reasoning_effort)
+        model = create_model(config.model, config.reasoning_effort, api_mode=config.api_mode)
         agent = FormPilotAgent(
             model,
             form_tools.registry(),

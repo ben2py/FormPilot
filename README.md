@@ -9,6 +9,12 @@ FormPilot 是一个由 LLM 自主决策并调用浏览器工具的网页填表 A
 - `inspect_page`：观察可见字段、选项、按钮和错误提示；
 - `get_profile_catalog`：查看本地资料的语义路径，不读取任何资料原值；
 - `fill_from_profile`：把本地资料填入指定字段并回读验证；
+- `open_field`：打开只读输入框背后的自定义选择器；
+- `inspect_widget`：观察弹出的下拉、级联、树形和日历组件；
+- `click_widget_option`：点击 `li/div/td` 等非原生选项；
+- `click_widget_control`：点击上一年、下一年、上一月、下一月等面板按钮；
+- `select_cascade_from_profile`：按本地资料逐级选择省、市、区等路径；
+- `set_date_from_profile`：设置原生日期或导航自定义日历；
 - `verify_field`：验证网页是否保留了已填值；
 - `wait_and_rescan`：处理异步加载和级联下拉框；
 - `pause_for_user`：让用户手动完成密码、验证码或歧义字段；
@@ -27,6 +33,19 @@ FormPilot 是一个由 LLM 自主决策并调用浏览器工具的网页填表 A
 - 登录、保存、发送验证码、注册和提交等点击需要一次性确认。
 - 审批令牌与 URL、字段和资料路径绑定，并且使用一次后立即失效。
 - 模型没有“执行任意 JavaScript”工具。
+
+## 支持的表单组件
+
+- 文本框、textarea、contenteditable；
+- 原生 select、checkbox、radio 和 `input[type=date]`；
+- 多个原生 select 构成的动态级联；
+- `div/li/span/td` 构成的可见弹层选项；
+- 自定义 Cascader，包括按省、市、区逐层展开；
+- 自定义 DatePicker，包括读取当前年月、跨年/跨月导航和日期格选择；
+- Element Plus 和 Ant Design 常见的 Cascader、Select、DatePicker DOM 结构；
+- 普通页面按钮、下一步、保存和经用户确认的提交动作。
+
+复杂组件专用工具失败时，Agent 可以退回 `inspect_widget → click_widget_option/click_widget_control → 再观察` 的逐步决策方式，不会盲目连续点击。
 
 ## 安装
 
@@ -53,6 +72,16 @@ cp examples/profile.example.json profile.json
 ```
 
 将 API Key 写入 `.env` 的 `OPENAI_API_KEY`。`.env` 和 `profile.json` 都已加入 `.gitignore`；不要在资料文件中保存 API Key、密码或验证码。
+
+使用 DeepSeek V4 时，把 `OPENAI_BASE_URL` 指向 DeepSeek，并设置模型名：
+
+```bash
+OPENAI_BASE_URL=https://api.deepseek.com
+OPENAI_API_KEY=sk-...
+FORMPILOT_MODEL=deepseek-v4-flash
+```
+
+`FORMPILOT_API_MODE` 默认为 `auto`：遇到 DeepSeek 模型或 base URL 时会自动走 Chat Completions（含 thinking 工具回传），其他情况仍使用 Responses API。
 
 ## 运行
 
@@ -98,7 +127,7 @@ python3 -m compileall -q formpilot
 .venv/bin/python scripts/smoke_python_browser.py
 ```
 
-当前测试覆盖：Agent 自主多轮工具调用、工具结果回传、敏感值隔离、验证码硬拦截、高风险资料审批、审批单次使用、提交前确认，以及动态下拉框。
+当前测试覆盖：Agent 自主多轮工具调用、工具结果回传、敏感值隔离、验证码硬拦截、高风险资料审批、审批单次使用、提交前确认、动态原生下拉框、三级自定义籍贯，以及需要跨年跨月导航的自定义日历。
 
 ## 目录
 
@@ -117,4 +146,4 @@ python3 -m compileall -q formpilot
 
 ## 当前边界
 
-第一版主要支持标准 DOM 表单。跨域 iframe、Canvas 表单、复杂富文本组件、材料文件解析和视觉定位尚未加入。网站反自动化和验证码必须尊重网站规则并由用户处理。
+跨域 iframe、Canvas 绘制的无 DOM 控件、材料文件解析和纯视觉坐标定位尚未加入。不同网站可能深度定制组件 DOM，因此专用适配器无法识别时会退回通用弹层工具或请求用户接管。网站反自动化和验证码必须尊重网站规则并由用户处理。
