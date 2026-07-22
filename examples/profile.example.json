@@ -1,0 +1,29 @@
+{
+  "identity": {
+    "full_name_zh": "张三",
+    "document_type": "居民身份证",
+    "document_number": "310101199001011234",
+    "gender": "男",
+    "birth_date": "1990-01-01",
+    "nationality": "中国",
+    "ethnicity": "汉族"
+  },
+  "contact": {
+    "mobile": "13800138000",
+    "email": "zhangsan@example.com",
+    "address": "上海市示例路 123 号",
+    "postal_code": "200000"
+  },
+  "education": {
+    "school": "示例大学",
+    "major": "计算机科学与技术",
+    "degree": "工学学士",
+    "graduation_date": "2026-06-30"
+  },
+  "application": {
+    "project": "博士研究生招生",
+    "batch": "2026年秋季批次",
+    "mode": "普通招考",
+    "program": "计算机科学与技术"
+  }
+}

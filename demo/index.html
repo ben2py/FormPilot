@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FormPilot 研究生报名演示</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; color: #202036; background: #f2f4f8; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; }
+      header { padding: 28px max(24px, calc((100% - 880px) / 2)); color: white; background: linear-gradient(115deg, #243b78, #596db3); }
+      header h1 { margin: 0; font-size: 25px; } header p { margin: 8px 0 0; opacity: .75; }
+      main { max-width: 880px; margin: 28px auto; padding: 0 24px 60px; }
+      form { padding: 30px; border-radius: 16px; background: white; box-shadow: 0 12px 32px rgba(36, 49, 89, .1); }
+      fieldset { margin: 0 0 26px; padding: 0; border: 0; }
+      legend { width: 100%; margin-bottom: 18px; padding-bottom: 10px; border-bottom: 1px solid #e8eaf0; color: #31477f; font-size: 17px; font-weight: 700; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+      label { display: flex; flex-direction: column; gap: 7px; color: #53576b; font-size: 13px; }
+      input, select { height: 42px; padding: 0 12px; border: 1px solid #ced2dd; border-radius: 8px; color: #202036; background: white; }
+      input:focus, select:focus { border-color: #5e6fb4; outline: 3px solid rgba(85, 106, 184, .12); }
+      .wide { grid-column: 1 / -1; }
+      .actions { display: flex; justify-content: flex-end; gap: 10px; }
+      button { padding: 11px 18px; border: 0; border-radius: 8px; font-weight: 700; }
+      .secondary { color: #445581; background: #edf0f7; }
+      .primary { color: white; background: #5367ac; }
+      .notice { margin-bottom: 18px; padding: 12px 14px; border-left: 3px solid #d99b38; color: #705929; background: #fff8e9; font-size: 13px; }
+      @media (max-width: 620px) { .grid { grid-template-columns: 1fr; } .wide { grid-column: auto; } form { padding: 20px; } }
+    </style>
+  </head>
+  <body>
+    <header><h1>研究生报考服务系统 · 演示页</h1><p>用于本地测试 FormPilot，不会向服务器发送数据</p></header>
+    <main>
+      <div class="notice">先加载 FormPilot 扩展，再点击工具栏图标填写个人资料并扫描此页。</div>
+      <form id="applicationForm">
+        <fieldset>
+          <legend>基本信息</legend>
+          <div class="grid">
+            <label for="xm">姓名<input id="xm" name="xm" placeholder="请输入真实姓名" autocomplete="name"></label>
+            <label for="zjlx">证件类型<select id="zjlx" name="zjlx"><option value="">--请选择--</option><option value="01">居民身份证</option><option value="03">港澳台身份证</option><option value="04">华侨身份证</option></select></label>
+            <label class="wide" for="zjhm">证件号码<input id="zjhm" name="zjhm" autocomplete="off"></label>
+            <label for="yddh">手机号码<input id="yddh" name="yddh" type="tel" autocomplete="tel"></label>
+            <label for="email">电子邮箱<input id="email" name="email" type="email" autocomplete="email"></label>
+            <label class="wide" for="txdz">通信地址<input id="txdz" name="txdz" autocomplete="street-address"></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>教育与报考信息</legend>
+          <div class="grid">
+            <label for="school">毕业院校<input id="school" name="school"></label>
+            <label for="major">本科专业<input id="major" name="major"></label>
+            <label for="project">招生项目<select id="project" name="project"><option value="">--请选择--</option><option>博士研究生招生</option><option>硕士研究生招生</option><option>全国优秀大学生夏令营</option></select></label>
+            <label for="batch">招生批次<select id="batch" name="batch"><option value="">--请先选择招生项目--</option></select></label>
+            <label for="mode">招生方式<select id="mode" name="mode"><option value="">--请先选择招生批次--</option></select></label>
+            <label for="captcha">验证码<input id="captcha" name="captcha" placeholder="必须由用户填写"></label>
+          </div>
+        </fieldset>
+        <div class="actions"><button type="button" class="secondary">保存草稿</button><button type="submit" class="primary">提交报名</button></div>
+      </form>
+    </main>
+    <script>
+      const project = document.getElementById("project");
+      const batch = document.getElementById("batch");
+      const mode = document.getElementById("mode");
+      project.addEventListener("change", () => {
+        batch.innerHTML = project.value ? '<option value="">--请选择--</option><option>2026年秋季批次</option><option>2026年春季批次</option>' : '<option value="">--请先选择招生项目--</option>';
+        mode.innerHTML = '<option value="">--请先选择招生批次--</option>';
+      });
+      batch.addEventListener("change", () => {
+        mode.innerHTML = batch.value ? '<option value="">--请选择--</option><option>普通招考</option><option>硕博连读</option>' : '<option value="">--请先选择招生批次--</option>';
+      });
+      document.getElementById("applicationForm").addEventListener("submit", (event) => {
+        event.preventDefault();
+        alert("演示页不会提交数据。FormPilot 也不会点击此按钮。");
+      });
+    </script>
+  </body>
+</html>
