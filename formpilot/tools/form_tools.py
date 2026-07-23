@@ -130,7 +130,10 @@ class FormPilotTools:
             needs_cascade = True
         if needs_cascade:
             sanitized["needs_cascade"] = True
-            sanitized["fill_hint"] = "select_cascade_from_profile（如 origin.province/city/district）"
+            sanitized["fill_hint"] = (
+                "优先 select_cascade_from_profile；失败则 open_field → inspect_widget → "
+                "click_visible_text(省/市/区) → confirm_overlay"
+            )
             # Disabled region display boxes still need to be filled via cascade.
             if not sanitized.get("has_value"):
                 sanitized["disabled"] = False
@@ -162,7 +165,8 @@ class FormPilotTools:
             if field.get("read_only") or field.get("needs_cascade"):
                 item["needs_cascade"] = True
                 item["fill_hint"] = field.get("fill_hint") or (
-                    "open_field / select_cascade_from_profile（如 origin.province、origin.city、origin.district）"
+                    "select_cascade_from_profile，或 open_field → inspect_widget → "
+                    "click_visible_text → confirm_overlay"
                 )
             incomplete.append(item)
         return incomplete
@@ -257,6 +261,11 @@ class FormPilotTools:
             "widgets": widget["widgets"][:30],
             "options": widget["options"][:300],
             "controls": widget["controls"][:200],
+            "iframe": widget.get("iframe"),
+            "hint": (
+                "若 options 含 source=iframe，说明地区/树选项在弹层 iframe 内；"
+                "可用 click_visible_text / click_widget_option 点选，再用 confirm_overlay 点确定。"
+            ),
         }
 
     async def open_field(self, field_id: str) -> dict[str, Any]:
@@ -267,6 +276,16 @@ class FormPilotTools:
 
     async def click_widget_control(self, widget_control_id: str) -> dict[str, Any]:
         return await self.browser.click_widget_control(widget_control_id)
+
+    async def click_visible_text(self, text: str, where: str = "auto") -> dict[str, Any]:
+        if hasattr(self.browser, "click_visible_text"):
+            return await self.browser.click_visible_text(text, where=where)
+        return {"ok": False, "error": "当前浏览器未实现 click_visible_text"}
+
+    async def confirm_overlay(self) -> dict[str, Any]:
+        if hasattr(self.browser, "confirm_overlay"):
+            return await self.browser.confirm_overlay()
+        return {"ok": False, "error": "当前浏览器未实现 confirm_overlay"}
 
     async def fill_from_profile(self, field_id: str, profile_path: str, approval_id: str | None) -> dict[str, Any]:
         snapshot = await self.browser.inspect()
@@ -385,9 +404,9 @@ class FormPilotTools:
                     "error": "还有必填项未填写，禁止点击下一步",
                     "incomplete_required": incomplete,
                     "hint": (
-                        "请先填完 incomplete_required；若条目带 needs_cascade/fill_hint，"
-                        "用 select_cascade_from_profile（如 origin.province/city/district）；"
-                        "若本地资料不足，调用 request_missing_profile_fields 在终端向用户补齐并写回 profile.json。"
+                        "请先填完 incomplete_required；地区项可试 select_cascade_from_profile，"
+                        "失败则 open_field → inspect_widget → click_visible_text → confirm_overlay；"
+                        "资料不足则 request_missing_profile_fields。"
                     ),
                 }
         target = f"click:{snapshot['url']}:{control_id}"
@@ -798,7 +817,36 @@ class FormPilotTools:
             },
             self.search_visible_text,
         ))
-        registry.register(Tool("inspect_widget", "读取当前已打开的下拉、级联、树形或日历弹层，返回可见选项和弹层按钮。", empty, self.inspect_widget))
+        registry.register(Tool(
+            "inspect_widget",
+            "读取当前已打开的下拉/级联/树/日历弹层。含主页面选项，以及 layui iframe 内选项（source=iframe）。先观察再决策点击。",
+            empty,
+            self.inspect_widget,
+        ))
+        registry.register(Tool(
+            "click_visible_text",
+            "按可见文案点击选项（页面或弹层 iframe）。复杂选择器优先：open_field → inspect_widget → click_visible_text → confirm_overlay。",
+            {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "要点击的可见文案，如 浙江省 / 温州市 / 确定"},
+                    "where": {
+                        "type": "string",
+                        "enum": ["auto", "page", "iframe"],
+                        "description": "auto 优先 iframe；page 仅主文档；iframe 仅弹层 iframe",
+                    },
+                },
+                "required": ["text"],
+                "additionalProperties": False,
+            },
+            self.click_visible_text,
+        ))
+        registry.register(Tool(
+            "confirm_overlay",
+            "点击最上层弹层的「确定/确认」。地区选择在 iframe 内点完省市区后调用。",
+            empty,
+            self.confirm_overlay,
+        ))
         registry.register(Tool(
             "fill_from_profile",
             "把一个本地资料路径的真实值填写到网页字段并回读验证。密码/验证码字段不可用。",
@@ -913,7 +961,7 @@ class FormPilotTools:
         ))
         registry.register(Tool(
             "select_cascade_from_profile",
-            "打开只读/自定义地区级联选择器（出生地、籍贯、户口所在地等），按多个本地资料路径逐层选择。approval_id 可传 null。",
+            "便捷工具：按资料路径尝试自动逐级选择地区。失败时不要死磕，改用 open_field + inspect_widget + click_visible_text + confirm_overlay 由你决策。",
             {
                 "type": "object",
                 "properties": {

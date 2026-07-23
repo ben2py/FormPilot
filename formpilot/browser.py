@@ -755,6 +755,100 @@ class PlaywrightFormBrowser:
         )
         return int(result or 0)
 
+    async def click_visible_text(self, text: str, *, where: str = "auto") -> dict[str, Any]:
+        """Click a visible option/label by text. Model-driven primitive for custom pickers."""
+        wanted = str(text or "").strip()
+        if not wanted:
+            return {"ok": False, "error": "text 不能为空"}
+        if len(wanted) > 80:
+            return {"ok": False, "error": "text 过长"}
+        scope = (where or "auto").strip().lower()
+        if scope not in {"auto", "page", "iframe"}:
+            return {"ok": False, "error": "where 只能是 auto / page / iframe"}
+
+        async def click_in_page() -> dict[str, Any]:
+            return await self.page.evaluate(
+                """(wantedRaw) => {
+                  const norm = (s) => String(s || '').replace(/[\\s_\\-—:：]/g, '').toLowerCase();
+                  const wanted = norm(wantedRaw);
+                  const visible = (el) => {
+                    const s = getComputedStyle(el);
+                    return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.getClientRects().length > 0;
+                  };
+                  const nodes = Array.from(document.querySelectorAll(
+                    "a, button, li, td, span, div, label, [role='option'], [role='treeitem'], [onclick]"
+                  )).filter(visible);
+                  const scored = [];
+                  for (const el of nodes) {
+                    const raw = String(el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                    if (!raw || raw.length > 40) continue;
+                    if (el.querySelectorAll('a, li, td, button').length > 3) continue;
+                    const n = norm(raw);
+                    let score = -1;
+                    if (n === wanted) score = 100;
+                    else if (n.includes(wanted) || wanted.includes(n)) score = 70 - Math.abs(n.length - wanted.length);
+                    if (score >= 0) scored.push({el, text: raw, score});
+                  }
+                  scored.sort((a, b) => b.score - a.score || a.text.length - b.text.length);
+                  if (!scored.length) return {ok: false, error: 'not_found'};
+                  const best = scored[0].score;
+                  const top = scored.filter(i => i.score === best);
+                  const shortest = Math.min(...top.map(i => i.text.length));
+                  const finalists = top.filter(i => i.text.length === shortest);
+                  if (finalists.length !== 1) {
+                    return {ok: false, error: 'ambiguous', candidates: finalists.map(i => i.text).slice(0, 20)};
+                  }
+                  finalists[0].el.click();
+                  return {ok: true, text: finalists[0].text, where: 'page'};
+                }""",
+                wanted,
+            )
+
+        tried: list[str] = []
+        if scope in {"auto", "iframe"}:
+            frame = await self._top_layui_iframe()
+            if frame is not None:
+                tried.append("iframe")
+                result = await self._click_text_in_frame(frame, wanted)
+                if result.get("ok"):
+                    await self.page.wait_for_timeout(200)
+                    return {"ok": True, "text": result.get("text"), "where": "iframe", "matched": result.get("text")}
+                if scope == "iframe":
+                    return {
+                        "ok": False,
+                        "error": result.get("error") or "iframe 中未找到",
+                        "where": "iframe",
+                        "available_options": (result.get("available") or [])[:80],
+                    }
+            elif scope == "iframe":
+                return {"ok": False, "error": "当前没有可见的弹层 iframe", "where": "iframe"}
+
+        if scope in {"auto", "page"}:
+            tried.append("page")
+            result = await click_in_page()
+            if result.get("ok"):
+                await self.page.wait_for_timeout(200)
+                return result
+            if scope == "page":
+                return {"ok": False, "error": result.get("error") or "页面中未找到", "where": "page", "candidates": result.get("candidates")}
+
+        return {
+            "ok": False,
+            "error": "未找到唯一匹配的可见文本",
+            "wanted": wanted,
+            "tried": tried,
+        }
+
+    async def confirm_overlay(self) -> dict[str, Any]:
+        """Click the primary confirm button on the topmost overlay/dialog."""
+        confirmed = await self._confirm_top_layui_layer()
+        await self.page.wait_for_timeout(250)
+        return {
+            "ok": bool(confirmed),
+            "confirmed": bool(confirmed),
+            "message": "已点击弹层确定" if confirmed else "未找到可点击的确定按钮",
+        }
+
     async def _top_layui_iframe(self) -> Any | None:
         """Return the content frame of the topmost visible layui area-picker iframe."""
         if self.page is None:
