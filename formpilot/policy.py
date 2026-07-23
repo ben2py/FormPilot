@@ -16,6 +16,13 @@ from .credentials import (
 SECRET_PATTERN = re.compile(r"验证码|captcha|短信码|动态码|密码|password|口令|签名", re.I)
 SIDE_EFFECT_PATTERN = re.compile(r"提交|注册|登录|保存|发送|获取验证码|同意|确认|支付|删除|上传", re.I)
 SAFE_NAVIGATION_PATTERN = re.compile(r"^(下一步|上一步|返回|继续|下一页|上一页)$")
+# Form table edits (family/experience rows): do not bother the human.
+SAFE_TABLE_EDIT_PATTERN = re.compile(
+    r"^(新增|添加|增加|增行|加一行|添加一行|增加一行|新增一行|添加成员|增加成员|新增成员|"
+    r"添加家庭成员|新增家庭成员|加号|\+|＋)$|"
+    r"新增|添加一行|增加一行|添加成员|新增成员",
+    re.I,
+)
 LOGIN_URL_PATTERN = re.compile(r"logon|login|signin|sign-in|/sso\b|/auth\b", re.I)
 LOGIN_CONTROL_PATTERN = re.compile(r"登录|登陆|login|sign\s*in", re.I)
 
@@ -72,6 +79,8 @@ class ApprovalPolicy:
     @staticmethod
     def click_requires_confirmation(control: dict) -> bool:
         label = str(control.get("label", "")).strip()
+        if SAFE_TABLE_EDIT_PATTERN.search(label):
+            return False
         if SIDE_EFFECT_PATTERN.search(label):
             return True
         if SAFE_NAVIGATION_PATTERN.fullmatch(label):

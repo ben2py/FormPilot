@@ -17,7 +17,7 @@ SYSTEM_PROMPT = """
 4. 进入表单填写阶段后：inspect_page，先看 incomplete_required / 空字段，把本页能填的尽量填完。
    - 页面标签旁有 * / ＊ /「必填」的，一律按必填处理（与 incomplete_required 一致）。
    - 有直接对应资料路径 → fill_from_profile。
-   - **家庭主要成员页**：必须调用 fill_family_from_profile，把 profile.family 里全部成员（如 member1 母亲周海霞、member2 父亲白洪渠）都填上；不要只填一行。页面行不够或资料缺项再 request_missing / pause。
+   - **家庭主要成员页**：必须调用 fill_family_from_profile，把 profile.family 里全部成员都填上；行不够时工具会自己点「新增/添加」，不要为此 request_user_confirmation。
    - 资料里没有同名字段，但能从已有信息合理推出 → fill_text。
    - 自定义弹层选择（needs_cascade：地区/学校/专业等；open 后常有 iframe）：
      1) 优先 select_cascade_from_profile（学校会自动按 education.province→education.school；专业用 ["education.major"]；地区用省市区路径）；

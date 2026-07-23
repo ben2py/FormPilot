@@ -32,6 +32,10 @@ from .base import Tool, ToolRegistry
 NEXT_STEP_PATTERN = re.compile(r"下一步|继续|下一页|保存并下一步", re.I)
 SKIP_REQUIRED_TYPES = {"hidden", "submit", "button", "reset", "image", "password"}
 PHOTO_CONFIRM_PATTERN = re.compile(r"确认上传|开始上传", re.I)
+ADD_ROW_PATTERN = re.compile(
+    r"新增|添加|增加|增行|加一行|添加一行|增加一行|新增一行|添加成员|增加成员|新增成员|添加家庭成员|新增家庭成员",
+    re.I,
+)
 
 
 class BrowserLike(Protocol):
@@ -405,22 +409,12 @@ class FormPilotTools:
             return "phone"
         return None
 
-    async def fill_family_from_profile(self, approval_id: str | None = None) -> dict[str, Any]:
-        """Fill every family.* member from profile into the on-page member table."""
-        members = self._family_members()
-        if not members:
-            return {
-                "ok": False,
-                "error": "profile.family 为空；请先在 profile.json 写好全部家庭成员",
-            }
-        snapshot = await self.browser.inspect()
-        fields = snapshot.get("fields") or []
+    def _family_row_map(self, fields: list[dict[str, Any]]) -> dict[int, list[dict[str, Any]]]:
         family_fields = [
             item for item in fields
             if item.get("table_row") is not None
             or re.search(r"成员\d+|姓名|关系|称谓|工作单位|电话|手机", str(item.get("label") or ""))
         ]
-        # Prefer explicitly tagged table rows.
         row_map: dict[int, list[dict[str, Any]]] = {}
         for field in family_fields:
             row = field.get("table_row")
@@ -430,23 +424,86 @@ class FormPilotTools:
             if row is None:
                 continue
             row_map.setdefault(int(row), []).append(field)
+        if row_map:
+            return row_map
+        candidates = [
+            item for item in fields
+            if re.search(r"姓名|关系|称谓|单位|职务|电话|手机", str(item.get("label") or ""))
+            and str(item.get("type") or "").lower() not in {"hidden", "file", "password"}
+        ]
+        width = 4
+        for index, field in enumerate(candidates):
+            row_map.setdefault(index // width + 1, []).append(field)
+        return row_map
 
-        if not row_map:
-            # Fallback: group consecutive unlabeled family-like inputs into rows of 4.
-            candidates = [
-                item for item in fields
-                if re.search(r"姓名|关系|称谓|单位|职务|电话|手机", str(item.get("label") or ""))
-                and str(item.get("type") or "").lower() not in {"hidden", "file", "password"}
-            ]
-            if not candidates:
+    def _find_add_row_control(self, controls: list[dict[str, Any]]) -> dict[str, Any] | None:
+        candidates = [
+            item for item in controls
+            if isinstance(item, dict)
+            and not item.get("disabled")
+            and ADD_ROW_PATTERN.search(str(item.get("label") or ""))
+            and not re.search(r"删除|移除|清空", str(item.get("label") or ""))
+        ]
+        if not candidates:
+            return None
+        # Prefer labels that mention family/member/row.
+        ranked = sorted(
+            candidates,
+            key=lambda item: (
+                0 if re.search(r"成员|家庭|行", str(item.get("label") or "")) else 1,
+                len(str(item.get("label") or "")),
+            ),
+        )
+        return ranked[0]
+
+    async def _ensure_family_rows(self, needed: int) -> dict[str, Any]:
+        """Click「新增/添加」until the family table has enough rows for profile members."""
+        added = 0
+        last_rows = 0
+        for _ in range(max(0, needed) + 2):
+            snapshot = await self.browser.inspect()
+            row_map = self._family_row_map(snapshot.get("fields") or [])
+            last_rows = len(row_map)
+            if last_rows >= needed:
+                return {"ok": True, "rows": last_rows, "added": added}
+            control = self._find_add_row_control(snapshot.get("controls") or [])
+            if control is None:
                 return {
                     "ok": False,
-                    "error": "当前页未识别到家庭成员表格字段；请 inspect_page 确认是否在「家庭主要成员」页",
-                    "members_in_profile": [path for path, _ in members],
+                    "rows": last_rows,
+                    "added": added,
+                    "error": "页面行数不足且未找到「新增/添加」按钮",
                 }
-            width = 4
-            for index, field in enumerate(candidates):
-                row_map.setdefault(index // width + 1, []).append(field)
+            await self.browser.click(str(control["control_id"]))
+            added += 1
+            await self.browser.wait_and_rescan(500)
+        snapshot = await self.browser.inspect()
+        row_map = self._family_row_map(snapshot.get("fields") or [])
+        return {
+            "ok": len(row_map) >= needed,
+            "rows": len(row_map),
+            "added": added,
+            "error": None if len(row_map) >= needed else "点击新增后行数仍不足",
+        }
+
+    async def fill_family_from_profile(self, approval_id: str | None = None) -> dict[str, Any]:
+        """Fill every family.* member from profile into the on-page member table."""
+        members = self._family_members()
+        if not members:
+            return {
+                "ok": False,
+                "error": "profile.family 为空；请先在 profile.json 写好全部家庭成员",
+            }
+        ensure = await self._ensure_family_rows(len(members))
+        snapshot = await self.browser.inspect()
+        row_map = self._family_row_map(snapshot.get("fields") or [])
+        if not row_map:
+            return {
+                "ok": False,
+                "error": "当前页未识别到家庭成员表格字段；请 inspect_page 确认是否在「家庭主要成员」页",
+                "members_in_profile": [path for path, _ in members],
+                "ensure_rows": ensure,
+            }
 
         filled: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
@@ -506,6 +563,8 @@ class FormPilotTools:
             "error_count": len(errors),
             "members_in_profile": [path for path, _ in members],
             "rows_on_page": used_rows,
+            "rows_added": ensure.get("added"),
+            "ensure_rows": ensure,
             "filled": filled,
             "errors": errors or None,
             "value_privacy": "已按 profile.family 全部成员写入页面；结果不回传原值",
@@ -801,6 +860,9 @@ class FormPilotTools:
         requires_confirm = self.policy.click_requires_confirmation(control)
         # Local photo confirm is part of the authorized upload flow.
         if PHOTO_CONFIRM_PATTERN.search(label):
+            requires_confirm = False
+        # Adding table rows (family/experience) is routine form editing — no human gate.
+        if ADD_ROW_PATTERN.search(label):
             requires_confirm = False
         if requires_confirm and not self.policy.consume(approval_id, target):
             return {
@@ -1250,7 +1312,7 @@ class FormPilotTools:
         ))
         registry.register(Tool(
             "fill_family_from_profile",
-            "家庭主要成员页专用：把 profile.family 下全部成员（member1/member2…的姓名/关系/单位/电话）按行一次性填入。不要只填一人。",
+            "家庭主要成员页专用：把 profile.family 下全部成员一次性填入；行数不够会自动点「新增/添加」（无需人工确认）。不要只填一人。",
             {
                 "type": "object",
                 "properties": {
