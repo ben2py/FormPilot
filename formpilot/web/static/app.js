@@ -210,7 +210,7 @@ async function loadAll() {
 function setStatus(text, cls = "") {
   const pill = $("statusPill");
   pill.textContent = text;
-  pill.className = `pill ${cls}`.trim();
+  pill.className = `status ${cls}`.trim();
 }
 
 function collectGuidance() {

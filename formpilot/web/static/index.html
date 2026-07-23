@@ -6,138 +6,154 @@
   <title>FormPilot</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600;8..60,700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-  <div class="atmosphere" aria-hidden="true"></div>
+  <div class="grid-bg" aria-hidden="true"></div>
+
   <header class="topbar">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true"></span>
-      <div>
+      <span class="brand-mark" aria-hidden="true">FP</span>
+      <div class="brand-copy">
         <div class="brand-name">FormPilot</div>
-        <div class="brand-sub">Autonomous form-filling agent</div>
+        <div class="brand-sub">本地填表控制台</div>
       </div>
     </div>
     <div class="top-meta">
-      <span id="statusPill" class="pill">Idle</span>
-      <span id="modelPill" class="pill muted">Model…</span>
+      <span id="statusPill" class="status">Idle</span>
+      <span id="modelPill" class="meta-chip">Model…</span>
     </div>
   </header>
 
-  <main class="layout">
-    <section class="panel profile-panel">
-      <div class="panel-head">
-        <h1>填写资料</h1>
-        <p>在这里维护报名所需信息，Agent 会从本地 profile 读取并填入网页。</p>
-      </div>
-      <div class="toolbar">
-        <button type="button" class="btn ghost" id="reloadProfile">重新加载</button>
-        <button type="button" class="btn primary" id="saveProfile">保存资料</button>
+  <main class="workspace">
+    <section class="col profile-col" aria-label="资料">
+      <div class="col-head sticky-head">
+        <div>
+          <h1>报名资料</h1>
+          <p>编辑后写入本地 profile.json</p>
+        </div>
+        <div class="btn-row">
+          <button type="button" class="btn ghost" id="reloadProfile">重载</button>
+          <button type="button" class="btn solid" id="saveProfile">保存</button>
+        </div>
       </div>
       <div id="profileEditor" class="editor-stack"></div>
 
-      <div class="panel-head compact">
-        <h2>任务说明</h2>
-        <p>用自然语言描述报考目标与填写偏好。</p>
-      </div>
-      <textarea id="taskEditor" class="task-editor" rows="8" spellcheck="false"></textarea>
-      <div class="toolbar">
-        <button type="button" class="btn ghost" id="reloadTask">重新加载</button>
-        <button type="button" class="btn primary" id="saveTask">保存任务</button>
+      <div class="block-split">
+        <div class="col-head compact">
+          <div>
+            <h2>任务说明</h2>
+            <p>自然语言目标与填写偏好</p>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn ghost" id="reloadTask">重载</button>
+            <button type="button" class="btn solid" id="saveTask">保存</button>
+          </div>
+        </div>
+        <textarea id="taskEditor" class="task-editor" rows="7" spellcheck="false"></textarea>
       </div>
     </section>
 
-    <section class="panel run-panel">
-      <div class="panel-head">
-        <h1>启动 Agent</h1>
-        <p>打开目标报名页后，交互确认会以弹窗出现在此控制台。</p>
+    <section class="col ops-col" aria-label="运行">
+      <div class="run-box">
+        <div class="col-head">
+          <div>
+            <h1>运行</h1>
+            <p>交互确认会在此弹窗出现</p>
+          </div>
+        </div>
+
+        <label class="field">
+          <span>目标 URL</span>
+          <input id="runUrl" type="url" placeholder="https://yzbm.tongji.edu.cn/..." />
+        </label>
+        <label class="field">
+          <span>补充指引（每行一条，可选）</span>
+          <textarea id="runGuidance" rows="2" placeholder="有专硕优先选专硕"></textarea>
+        </label>
+        <div class="run-bar">
+          <label class="check">
+            <input id="runHeadless" type="checkbox" />
+            <span>无头模式</span>
+          </label>
+          <div class="btn-row">
+            <button type="button" class="btn ghost danger" id="stopRun">停止</button>
+            <button type="button" class="btn action" id="startRun">开始填表</button>
+          </div>
+        </div>
       </div>
 
-      <details class="section api-section" open>
-        <summary>模型 API</summary>
-        <div class="section-body api-grid">
-          <div class="api-block">
-            <h3>普通 API（决策模型）</h3>
-            <p class="hint">写入本地 <code>.env</code>，用于 Agent 工具决策。</p>
-            <label class="field">
-              <span>API Key · OPENAI_API_KEY</span>
-              <input id="cfgApiKey" type="password" autocomplete="off" placeholder="sk-..." />
-            </label>
-            <label class="field">
-              <span>Base URL · OPENAI_BASE_URL</span>
-              <input id="cfgBaseUrl" type="url" placeholder="https://api.openai.com/v1 或 https://api.deepseek.com" />
-            </label>
-            <label class="field">
-              <span>模型 · FORMPILOT_MODEL</span>
-              <input id="cfgModel" type="text" placeholder="gpt-5.6-terra / deepseek-v4-flash" />
-            </label>
-            <div class="field-row">
+      <div class="log-box">
+        <div class="col-head compact">
+          <h2>日志</h2>
+          <button type="button" class="btn tiny ghost" id="clearLog">清空</button>
+        </div>
+        <div id="console" class="console" aria-live="polite"></div>
+      </div>
+
+      <details class="api-drawer">
+        <summary>
+          <span>API 配置</span>
+          <span class="summary-note">普通模型 / 视觉模型 · 写入 .env</span>
+        </summary>
+        <div class="api-body">
+          <div class="api-cols">
+            <div class="api-block">
+              <h3>决策模型</h3>
               <label class="field">
-                <span>API 模式 · FORMPILOT_API_MODE</span>
-                <select id="cfgApiMode">
-                  <option value="auto">auto</option>
-                  <option value="responses">responses</option>
-                  <option value="chat">chat</option>
-                </select>
+                <span>API Key</span>
+                <input id="cfgApiKey" type="password" autocomplete="off" placeholder="OPENAI_API_KEY" />
               </label>
               <label class="field">
-                <span>推理强度 · FORMPILOT_REASONING_EFFORT</span>
-                <select id="cfgReasoning">
-                  <option value="low">low</option>
-                  <option value="medium">medium</option>
-                  <option value="high">high</option>
-                </select>
+                <span>Base URL</span>
+                <input id="cfgBaseUrl" type="url" placeholder="OPENAI_BASE_URL" />
+              </label>
+              <label class="field">
+                <span>Model</span>
+                <input id="cfgModel" type="text" placeholder="FORMPILOT_MODEL" />
+              </label>
+              <div class="field-row">
+                <label class="field">
+                  <span>Mode</span>
+                  <select id="cfgApiMode">
+                    <option value="auto">auto</option>
+                    <option value="responses">responses</option>
+                    <option value="chat">chat</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Effort</span>
+                  <select id="cfgReasoning">
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div class="api-block">
+              <h3>视觉模型（验证码）</h3>
+              <label class="field">
+                <span>API Key</span>
+                <input id="cfgVisionKey" type="password" autocomplete="off" placeholder="FORMPILOT_VISION_API_KEY" />
+              </label>
+              <label class="field">
+                <span>Base URL</span>
+                <input id="cfgVisionBase" type="url" placeholder="FORMPILOT_VISION_BASE_URL" />
+              </label>
+              <label class="field">
+                <span>Model</span>
+                <input id="cfgVisionModel" type="text" placeholder="FORMPILOT_VISION_MODEL" />
               </label>
             </div>
           </div>
-          <div class="api-block">
-            <h3>视觉 API（验证码）</h3>
-            <p class="hint">独立于决策模型；DeepSeek 文本接口不能传图，请用通义 VL 等。</p>
-            <label class="field">
-              <span>Vision Key · FORMPILOT_VISION_API_KEY</span>
-              <input id="cfgVisionKey" type="password" autocomplete="off" placeholder="sk-..." />
-            </label>
-            <label class="field">
-              <span>Vision Base URL · FORMPILOT_VISION_BASE_URL</span>
-              <input id="cfgVisionBase" type="url" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
-            </label>
-            <label class="field">
-              <span>Vision 模型 · FORMPILOT_VISION_MODEL</span>
-              <input id="cfgVisionModel" type="text" placeholder="qwen3-vl-plus" />
-            </label>
-          </div>
-          <div class="toolbar api-toolbar">
-            <button type="button" class="btn ghost" id="reloadSettings">重新加载</button>
-            <button type="button" class="btn primary" id="saveSettings">保存 API 配置</button>
+          <div class="btn-row api-actions">
+            <button type="button" class="btn ghost" id="reloadSettings">重载</button>
+            <button type="button" class="btn solid" id="saveSettings">保存到 .env</button>
           </div>
         </div>
       </details>
-
-      <label class="field">
-        <span>目标 URL</span>
-        <input id="runUrl" type="url" placeholder="https://yzbm.tongji.edu.cn/..." />
-      </label>
-      <label class="field">
-        <span>补充指引（可选，每行一条）</span>
-        <textarea id="runGuidance" rows="3" placeholder="有专硕优先选专硕&#10;资料更新时覆盖重填"></textarea>
-      </label>
-      <div class="row-actions">
-        <label class="check">
-          <input id="runHeadless" type="checkbox" />
-          <span>无头浏览器</span>
-        </label>
-        <div class="btn-row">
-          <button type="button" class="btn danger ghost" id="stopRun">停止</button>
-          <button type="button" class="btn accent" id="startRun">开始填表</button>
-        </div>
-      </div>
-
-      <div class="console-head">
-        <h2>运行日志</h2>
-        <button type="button" class="btn tiny ghost" id="clearLog">清空</button>
-      </div>
-      <div id="console" class="console" aria-live="polite"></div>
     </section>
   </main>
 
@@ -145,7 +161,7 @@
 
   <div id="modal" class="modal" hidden>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-      <div class="modal-kicker" id="modalKicker">需要你的确认</div>
+      <div class="modal-kicker" id="modalKicker">需要确认</div>
       <h2 id="modalTitle">交互</h2>
       <p id="modalBody" class="modal-body"></p>
       <div id="modalFields" class="modal-fields" hidden></div>
@@ -155,7 +171,7 @@
       </label>
       <div class="modal-actions">
         <button type="button" class="btn ghost" id="modalDeny">拒绝 / 跳过</button>
-        <button type="button" class="btn accent" id="modalAllow">继续</button>
+        <button type="button" class="btn action" id="modalAllow">继续</button>
       </div>
     </div>
   </div>

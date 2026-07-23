@@ -1,7 +1,7 @@
 # FormPilot
 
 **LLM-driven browser agent for graduate application forms.**  
-Observe the page → decide the next tool → fill, verify, upload — with privacy-preserving profile handling and a Claude-style web console for human interaction.
+Observe the page → decide the next tool → fill, verify, upload — with privacy-preserving profile handling and a local web console for human interaction.
 
 ---
 
@@ -160,7 +160,7 @@ formpilot/
   policy.py         # approvals & hard blocks
   profile.py        # local vault + catalog
   documents.py      # PDF match / merge / upload helpers
-  web/              # FastAPI console + Claude-style UI
+  web/              # FastAPI console + static UI
   cli.py            # terminal entry
 docs/ARCHITECTURE.md
 tests_python/

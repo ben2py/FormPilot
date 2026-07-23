@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "formpilot-agent"
 version = "0.4.0"
-description = "A privacy-aware LLM form-filling agent with browser tools and a Claude-style web console."
+description = "A privacy-aware LLM form-filling agent with browser tools and a local web console."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
