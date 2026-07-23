@@ -50,11 +50,17 @@ PauseHandler = Callable[[str], Any | Awaitable[Any]]
 
 
 async def _default_confirm(message: str) -> bool:
+    if os.getenv("FORMPILOT_AUTO_APPROVE", "").strip() in {"1", "true", "yes", "y"}:
+        print(f"\n{message}\n[AUTO] 已自动允许", flush=True)
+        return True
     answer = await asyncio.to_thread(input, f"\n{message}\n允许？[y/N] ")
     return answer.strip().lower() in {"y", "yes", "是", "允许"}
 
 
 async def _default_pause(message: str) -> str:
+    if os.getenv("FORMPILOT_AUTO_APPROVE", "").strip() in {"1", "true", "yes", "y"}:
+        print(f"\n{message}\n[AUTO] 跳过人工暂停，继续执行", flush=True)
+        return ""
     reply = await asyncio.to_thread(
         input,
         f"\n{message}\n完成后按 Enter 继续；也可输入自然语言指引后回车：\n> ",

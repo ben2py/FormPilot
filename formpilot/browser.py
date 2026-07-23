@@ -57,12 +57,35 @@ SCAN_SCRIPT = r"""
     if (!td) return "";
     const prev = td.previousElementSibling;
     if (prev && (prev.tagName === "TD" || prev.tagName === "TH")) {
-      return cleanLabelText(prev) || compact(prev.innerText || prev.textContent);
+      const text = cleanLabelText(prev) || compact(prev.innerText || prev.textContent);
+      // Skip empty or control-only cells; family grids put labels in the header row.
+      if (text && text.length <= 40 && !/^(选择|查询|浏览)$/.test(text)) return text;
     }
     const row = td.parentElement;
     if (row) {
       const th = Array.from(row.children).find(x => x.tagName === "TH");
-      if (th && th !== td) return cleanLabelText(th) || compact(th.innerText || th.textContent);
+      if (th && th !== td) {
+        const text = cleanLabelText(th) || compact(th.innerText || th.textContent);
+        if (text) return text;
+      }
+    }
+    // Column headers: 姓名/关系/单位/电话 style tables (family members, etc.).
+    const table = td.closest("table");
+    if (table && row) {
+      const cellIndex = Array.from(row.children).indexOf(td);
+      if (cellIndex >= 0) {
+        const rows = Array.from(table.querySelectorAll("tr"));
+        const headerRow = table.querySelector("thead tr") || rows.find(r => {
+          if (r === row || r.querySelector("input, select, textarea")) return false;
+          const texts = Array.from(r.children).map(c => compact(c.innerText || c.textContent, 40));
+          return texts.some(t => /姓名|关系|单位|职务|电话|手机|称谓/.test(t));
+        });
+        if (headerRow && headerRow.children[cellIndex]) {
+          const headerCell = headerRow.children[cellIndex];
+          const text = cleanLabelText(headerCell) || compact(headerCell.innerText || headerCell.textContent, 40);
+          if (text) return text;
+        }
+      }
     }
     return "";
   };
