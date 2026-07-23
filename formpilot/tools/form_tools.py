@@ -365,21 +365,6 @@ class FormPilotTools:
             return await self.browser.confirm_overlay()
         return {"ok": False, "error": "当前浏览器未实现 confirm_overlay"}
 
-    @staticmethod
-    def _normalize_field_value(field: dict[str, Any], value: Any) -> tuple[Any, str | None]:
-        """Normalize values for site-specific validators. Returns (value, error)."""
-        text = str(value or "").strip()
-        label = str(field.get("label") or "")
-        if re.search(r"绩点", label):
-            text = text.replace("／", "/").replace("⁄", "/")
-            text = re.sub(r"\s*/\s*", "/", text)
-            if re.fullmatch(r"\d+(\.\d+)?", text):
-                return text, "绩点须为「成绩/满分」格式（例 4.1/5 或 4.2/5），不要只填 4.1"
-            if not re.fullmatch(r"\d+(\.\d+)?/\d+(\.\d+)?", text):
-                return text, "绩点格式无效，请用 4.1/5 这种「成绩/满分」"
-            return text, None
-        return value, None
-
     async def fill_from_profile(self, field_id: str, profile_path: str, approval_id: str | None) -> dict[str, Any]:
         snapshot = await self.browser.inspect()
         field = next((item for item in snapshot["fields"] if item["field_id"] == field_id), None)
@@ -392,10 +377,6 @@ class FormPilotTools:
             value = self.profile.get(profile_path)
         except KeyError as exc:
             return {"ok": False, "error": str(exc)}
-
-        value, norm_error = self._normalize_field_value(field, value)
-        if norm_error:
-            return {"ok": False, "error": norm_error, "profile_path": profile_path}
 
         result = await self.browser.fill(field_id, value)
         verification = result.get("verification")
@@ -610,9 +591,6 @@ class FormPilotTools:
             return {"ok": False, "error": "字段已消失，请重新 inspect_page"}
         if self.policy.secret_field(field):
             return {"ok": False, "blocked": True, "error": "密码、验证码、文件或签名字段必须由用户处理"}
-        text, norm_error = self._normalize_field_value(field, text)
-        if norm_error:
-            return {"ok": False, "error": norm_error, "field_id": field_id}
         result = await self.browser.fill(field_id, text)
         verification = result.get("verification")
         if isinstance(verification, dict):
@@ -1097,10 +1075,9 @@ class FormPilotTools:
             result["error"] = joined[:200] or "保存失败，页面未前进"
             result["hint"] = (
                 "服务器保存失败：不要 dismiss_page_overlays。"
-                "先 search_visible_text「校验结果」；"
+                "先 search_visible_text「校验结果」对照页面示例修字段；"
                 "学习信息常见原因：专业未真正选中、年月非 yyyy-MM、"
-                "排名名次不要写成 3/94（名次与总人数分两栏）、"
-                "绩点须为 4.1/5 这种成绩/满分（禁止只填 4.1）。"
+                "排名名次与总人数分两栏、绩点格式与页面提示不符。"
                 "修好后 confirm_overlay 点确定，再点下一步。"
             )
         return result
@@ -1127,8 +1104,8 @@ class FormPilotTools:
                     "closed_messages": list(visible or [])[:8],
                     "error": "当前弹层含保存/校验失败提示，禁止关闭",
                     "hint": (
-                        "请先根据 closed_messages/校验结果修字段；"
-                        "绩点用 4.1/5 格式；修好后用 confirm_overlay 点确定关掉弹窗，再点下一步。"
+                        "请先根据 closed_messages/校验结果与页面字段示例修字段；"
+                        "修好后用 confirm_overlay 点确定关掉弹窗，再点下一步。"
                         "不要清空错误提示后盲点下一步。"
                     ),
                 }
