@@ -123,6 +123,14 @@
     "recommender_note": "待补充"
   },
   "documents": {
-    "photo": "personal_info/photo_150x200.jpg"
+    "photo": "personal_info/photo_150x200.jpg",
+    "id_card": "personal_info/PDF/一页身份证.pdf",
+    "student_status": "personal_info/PDF/教育部学籍在线验证报告.pdf",
+    "transcript": "personal_info/PDF/本科成绩单.pdf",
+    "gpa_rank": "personal_info/PDF/绩点排名证明.pdf",
+    "english": "personal_info/PDF/英语成绩证明.pdf",
+    "resume": "personal_info/PDF/个人简历.pdf",
+    "awards_research": "personal_info/PDF/奖项_学术成果证明.pdf",
+    "materials_dir": "personal_info/PDF"
   }
 }

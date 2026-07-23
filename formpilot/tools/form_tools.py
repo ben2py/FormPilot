@@ -17,6 +17,12 @@ from ..credentials import (
     match_project_option,
     match_select_option,
 )
+from ..documents import (
+    list_local_documents,
+    merge_pdfs,
+    preview_pdf_text,
+    suggest_documents_for_requirement,
+)
 from ..policy import ApprovalPolicy, LOGIN_CONTROL_PATTERN
 from ..profile import PROFILE_LABELS, ProfileStore
 from ..task import TaskBrief
@@ -60,8 +66,10 @@ async def _default_confirm(message: str) -> bool:
 
 async def _default_pause(message: str) -> str:
     auto = os.getenv("FORMPILOT_AUTO_APPROVE", "").strip().lower() in {"1", "true", "yes", "y"}
-    # File upload / signature still need a human even in auto mode.
-    needs_human = bool(re.search(r"上传|照片|签名|文件|短信|验证码", str(message or "")))
+    # File upload / signature / missing materials still need a human even in auto mode.
+    needs_human = bool(
+        re.search(r"上传|照片|签名|文件|材料|缺失|找不到|不确定|合并|短信|验证码", str(message or ""))
+    )
     if auto and not needs_human:
         print(f"\n{message}\n[AUTO] 跳过人工暂停，继续执行", flush=True)
         return ""
@@ -171,7 +179,9 @@ class FormPilotTools:
                 sanitized["disabled"] = False
         if str(sanitized.get("type") or "").lower() == "file":
             sanitized["fill_hint"] = (
-                "upload_from_profile（证件照 documents.photo）；上传后点「确认上传」"
+                "材料上传：先 suggest_documents_for_requirement(页面要求文案) → "
+                "自信则 upload_local_file / upload_from_profile；"
+                "多份合并用 merge_pdfs + preview_pdf_text 自检；不确定则 pause_for_user"
             )
             if not sanitized.get("has_value"):
                 sanitized["disabled"] = False
@@ -497,6 +507,56 @@ class FormPilotTools:
         result["value_privacy"] = "已使用本地文件路径上传；结果不回传文件内容"
         return result
 
+    async def list_local_documents(self) -> dict[str, Any]:
+        docs = list_local_documents()
+        return {
+            "ok": True,
+            "count": len(docs),
+            "documents": docs,
+            "hint": (
+                "上传材料页：对每个网页要求调用 suggest_documents_for_requirement；"
+                "匹配自信再 upload_local_file；需合并则 merge_pdfs + preview_pdf_text；"
+                "没有或不确定则 pause_for_user。"
+            ),
+        }
+
+    async def suggest_documents_for_requirement(self, requirement: str) -> dict[str, Any]:
+        return suggest_documents_for_requirement(requirement)
+
+    async def merge_pdfs(self, paths: list[str], output_name: str | None = None) -> dict[str, Any]:
+        return merge_pdfs(paths, output_name=output_name)
+
+    async def preview_pdf_text(self, path: str, max_chars: int = 4000) -> dict[str, Any]:
+        return preview_pdf_text(path, max_chars=max(500, min(int(max_chars or 4000), 12000)))
+
+    async def upload_local_file(
+        self,
+        path: str,
+        field_id: str | None = None,
+        approval_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Upload an explicit local file path onto a file input."""
+        snapshot = await self.browser.inspect()
+        fields = snapshot.get("fields") or []
+        target = None
+        if field_id:
+            target = next((item for item in fields if item.get("field_id") == field_id), None)
+            if target is None:
+                return {"ok": False, "error": "字段已消失，请重新 inspect_page"}
+        else:
+            file_fields = [item for item in fields if str(item.get("type") or "").lower() == "file"]
+            if not file_fields:
+                return {"ok": False, "error": "当前页面没有 file 输入框"}
+            empty = [item for item in file_fields if not item.get("has_value")]
+            target = (empty or file_fields)[0]
+            field_id = str(target.get("field_id"))
+        if not hasattr(self.browser, "upload_file"):
+            return {"ok": False, "error": "当前浏览器不支持 upload_file"}
+        result = await self.browser.upload_file(field_id, path)
+        result["local_path"] = str(path)
+        result["value_privacy"] = "已使用本地文件路径上传；结果不回传文件内容"
+        return result
+
     async def wait_and_rescan(self, milliseconds: int) -> dict[str, Any]:
         snapshot = await self.browser.wait_and_rescan(milliseconds)
         return self._public_snapshot(snapshot)
@@ -525,7 +585,8 @@ class FormPilotTools:
                     "incomplete_required": incomplete,
                     "hint": (
                         "请先填完 incomplete_required；地区/学校/专业可试 select_cascade_from_profile，"
-                        "年月用 set_date_from_profile；文件用 upload_from_profile；"
+                        "年月用 set_date_from_profile；材料用 suggest_documents_for_requirement → "
+                        "upload_local_file / merge_pdfs；"
                         "失败则 open_field → inspect_widget → "
                         "click_visible_text → confirm_overlay；资料不足则 request_missing_profile_fields。"
                     ),
@@ -1122,6 +1183,80 @@ class FormPilotTools:
                 "additionalProperties": False,
             },
             self.upload_from_profile,
+        ))
+        registry.register(Tool(
+            "list_local_documents",
+            "列出 personal_info/ 与 personal_info/PDF/ 下可用的本地材料（PDF/图片路径与文件名）。进入上传材料页时先调用。",
+            empty,
+            self.list_local_documents,
+        ))
+        registry.register(Tool(
+            "suggest_documents_for_requirement",
+            "根据网页上的上传要求文案，严格匹配本地文件名/内容关键词，返回候选与是否自信。上传前必须先对每条要求调用。",
+            {
+                "type": "object",
+                "properties": {
+                    "requirement": {
+                        "type": "string",
+                        "description": "网页上的材料名称或说明，如「身份证扫描件」「本科成绩单」",
+                    },
+                },
+                "required": ["requirement"],
+                "additionalProperties": False,
+            },
+            self.suggest_documents_for_requirement,
+        ))
+        registry.register(Tool(
+            "merge_pdfs",
+            "把多份本地 PDF 合并为一个文件（输出到 .formpilot/merged/）。当网页要求一份材料但本地是多份相关证明时使用；合并后必须 preview_pdf_text 自检。",
+            {
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "maxItems": 20,
+                        "description": "按合并顺序的 PDF 相对/绝对路径",
+                    },
+                    "output_name": {
+                        "type": ["string", "null"],
+                        "description": "可选输出文件名（不含路径）",
+                    },
+                },
+                "required": ["paths", "output_name"],
+                "additionalProperties": False,
+            },
+            self.merge_pdfs,
+        ))
+        registry.register(Tool(
+            "preview_pdf_text",
+            "提取 PDF 文本供你核对是否覆盖网页要求的内容。合并后或上传前不确定时调用；扫描件可能无文本则 pause_for_user。",
+            {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "max_chars": {"type": "integer", "minimum": 500, "maximum": 12000},
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            self.preview_pdf_text,
+        ))
+        registry.register(Tool(
+            "upload_local_file",
+            "把明确的本地文件路径上传到页面 file 输入框（来自 suggest/merge 返回的 path）。可省略 field_id；上传后若有「确认上传」再 click_control。",
+            {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "如 personal_info/PDF/本科成绩单.pdf"},
+                    "field_id": {"type": ["string", "null"]},
+                    "approval_id": nullable_approval,
+                },
+                "required": ["path", "field_id", "approval_id"],
+                "additionalProperties": False,
+            },
+            self.upload_local_file,
         ))
         registry.register(Tool(
             "verify_field",
