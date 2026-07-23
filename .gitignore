@@ -6,6 +6,7 @@ credentials.json
 .env
 .env.*
 !.env.example
+personal_info/
 __pycache__/
 *.py[cod]
 *.egg-info/

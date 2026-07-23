@@ -41,6 +41,7 @@ PROFILE_LABELS = {
     "application.batch": "招生批次",
     "application.mode": "招生方式",
     "application.program": "报考专业",
+    "documents.photo": "证件照片本地路径",
 }
 
 HIGH_RISK_PATHS = {

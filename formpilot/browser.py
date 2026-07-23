@@ -199,12 +199,22 @@ SCAN_SCRIPT = r"""
   };
 
   const fields = Array.from(document.querySelectorAll("input, select, textarea, [contenteditable='true']"))
-    .filter(visible).slice(0, 300).map(el => {
+    .filter(el => {
+      const type = String(el.getAttribute("type") || "").toLowerCase();
+      // File inputs are often visually hidden; still expose them for upload tools.
+      if (type === "file") return true;
+      return visible(el);
+    })
+    .slice(0, 300).map(el => {
       const tag = el.tagName.toLowerCase();
       const type = tag === "select" ? "select" : String(el.getAttribute("type") || tag).toLowerCase();
       const label = labelFor(el);
       let current_value = type === "checkbox" || type === "radio" ? Boolean(el.checked) : String(el.value || "");
       let has_value = type === "checkbox" || type === "radio" ? Boolean(el.checked) : !isPlaceholderValue(current_value);
+      if (type === "file") {
+        has_value = Boolean(el.files && el.files.length > 0);
+        current_value = has_value ? String(el.files[0].name || "uploaded") : "";
+      }
       if (tag === "select") {
         const selected = selectMeaningful(el);
         current_value = selected.value;
@@ -213,15 +223,21 @@ SCAN_SCRIPT = r"""
       const readOnly = Boolean(el.readOnly);
       const disabled = Boolean(el.disabled);
       // Tongji region/school/major widgets are often disabled/readonly; real opener is nearby「选择」.
-      const needsCascade = tag !== "select" && type !== "checkbox" && type !== "radio" && (
+      const needsCascade = tag !== "select" && type !== "checkbox" && type !== "radio" && type !== "file" && (
         looksLikeRegionPicker(el, label)
         || ((disabled || readOnly) && (looksLikeCatalogPicker(el, label) || cellHasChooseLink(el)))
       );
-      const needsMonth = looksLikeMonthField(el, label) && tag !== "select" && type !== "checkbox" && type !== "radio";
+      const needsMonth = looksLikeMonthField(el, label) && tag !== "select" && type !== "checkbox" && type !== "radio" && type !== "file";
+      const fileRequired = type === "file" && (
+        isRequired(el) || /照片|头像|证件照|上传|材料|附件|简历|扫描件/.test(label)
+        || /照片|证件照|上传照片/.test(compact(document.body && document.body.innerText, 400))
+      );
       return {
         field_id: idFor(el, "field"), tag, type, id: el.id || "", name: el.name || "",
-        label, placeholder: el.getAttribute("placeholder") || "",
-        required: isRequired(el),
+        label: label || (type === "file" ? "文件上传" : label),
+        placeholder: el.getAttribute("placeholder") || "",
+        accept: type === "file" ? (el.getAttribute("accept") || "") : "",
+        required: type === "file" ? fileRequired : isRequired(el),
         disabled, read_only: readOnly,
         needs_cascade: needsCascade,
         needs_month: needsMonth,
@@ -1833,6 +1849,32 @@ class PlaywrightFormBrowser:
             "field_id": field_id,
             "actual": actual,
             "matches": matches,
+        }
+
+    async def upload_file(self, field_id: str, path: str | Path) -> dict[str, Any]:
+        """Attach a local file to an <input type=file> via Playwright (no OS dialog)."""
+        file_path = Path(path).expanduser()
+        if not file_path.is_absolute():
+            file_path = (Path.cwd() / file_path).resolve()
+        else:
+            file_path = file_path.resolve()
+        if not file_path.exists() or not file_path.is_file():
+            return {"ok": False, "error": f"本地文件不存在：{file_path}", "field_id": field_id}
+        locator, field = await self._field(field_id)
+        if str(field.get("type") or "").lower() != "file":
+            return {"ok": False, "error": "目标不是 file 输入框", "field_id": field_id, "type": field.get("type")}
+        await locator.set_input_files(str(file_path))
+        await self.page.wait_for_timeout(300)
+        # Re-inspect to confirm files were attached.
+        snapshot = await self.inspect()
+        updated = next((item for item in snapshot["fields"] if item["field_id"] == field_id), None)
+        has_value = bool(updated and updated.get("has_value"))
+        return {
+            "ok": has_value,
+            "field_id": field_id,
+            "has_value": has_value,
+            "file_name": file_path.name,
+            "hint": "若页面有「确认上传」按钮，请接着 click_control 提交文件",
         }
 
     async def click(self, control_id: str) -> dict[str, Any]:

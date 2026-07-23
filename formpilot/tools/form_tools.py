@@ -24,7 +24,8 @@ from .base import Tool, ToolRegistry
 
 
 NEXT_STEP_PATTERN = re.compile(r"下一步|继续|下一页|保存并下一步", re.I)
-SKIP_REQUIRED_TYPES = {"hidden", "submit", "button", "reset", "image", "file", "password"}
+SKIP_REQUIRED_TYPES = {"hidden", "submit", "button", "reset", "image", "password"}
+PHOTO_CONFIRM_PATTERN = re.compile(r"确认上传|开始上传", re.I)
 
 
 class BrowserLike(Protocol):
@@ -168,6 +169,12 @@ class FormPilotTools:
             )
             if not sanitized.get("has_value"):
                 sanitized["disabled"] = False
+        if str(sanitized.get("type") or "").lower() == "file":
+            sanitized["fill_hint"] = (
+                "upload_from_profile（证件照 documents.photo）；上传后点「确认上传」"
+            )
+            if not sanitized.get("has_value"):
+                sanitized["disabled"] = False
         return sanitized
 
     @staticmethod
@@ -205,6 +212,11 @@ class FormPilotTools:
                 item["needs_month"] = True
                 item["fill_hint"] = field.get("fill_hint") or (
                     "set_date_from_profile（education.enrollment_date / education.graduation_date）"
+                )
+            if str(field.get("type") or "").lower() == "file":
+                item["fill_hint"] = (
+                    "upload_from_profile（证件照用 documents.photo；其他材料用对应路径），"
+                    "成功后若有「确认上传」再 click_control"
                 )
             incomplete.append(item)
         return incomplete
@@ -455,6 +467,38 @@ class FormPilotTools:
         result["value_privacy"] = "已使用本地资料填写日期"
         return result
 
+    async def upload_from_profile(
+        self,
+        profile_path: str,
+        field_id: str | None = None,
+        approval_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Upload a local file referenced by profile path onto a file input."""
+        snapshot = await self.browser.inspect()
+        fields = snapshot.get("fields") or []
+        target = None
+        if field_id:
+            target = next((item for item in fields if item.get("field_id") == field_id), None)
+            if target is None:
+                return {"ok": False, "error": "字段已消失，请重新 inspect_page"}
+        else:
+            file_fields = [item for item in fields if str(item.get("type") or "").lower() == "file"]
+            if not file_fields:
+                return {"ok": False, "error": "当前页面没有 file 输入框"}
+            empty = [item for item in file_fields if not item.get("has_value")]
+            target = (empty or file_fields)[0]
+            field_id = str(target.get("field_id"))
+        try:
+            rel = str(self.profile.get(profile_path))
+        except KeyError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not hasattr(self.browser, "upload_file"):
+            return {"ok": False, "error": "当前浏览器不支持 upload_file"}
+        result = await self.browser.upload_file(field_id, rel)
+        result["profile_path"] = profile_path
+        result["value_privacy"] = "已使用本地文件路径上传；结果不回传文件内容"
+        return result
+
     async def wait_and_rescan(self, milliseconds: int) -> dict[str, Any]:
         snapshot = await self.browser.wait_and_rescan(milliseconds)
         return self._public_snapshot(snapshot)
@@ -483,12 +527,17 @@ class FormPilotTools:
                     "incomplete_required": incomplete,
                     "hint": (
                         "请先填完 incomplete_required；地区/学校/专业可试 select_cascade_from_profile，"
-                        "年月用 set_date_from_profile；失败则 open_field → inspect_widget → "
+                        "年月用 set_date_from_profile；文件用 upload_from_profile；"
+                        "失败则 open_field → inspect_widget → "
                         "click_visible_text → confirm_overlay；资料不足则 request_missing_profile_fields。"
                     ),
                 }
         target = f"click:{snapshot['url']}:{control_id}"
-        if self.policy.click_requires_confirmation(control) and not self.policy.consume(approval_id, target):
+        requires_confirm = self.policy.click_requires_confirmation(control)
+        # Local photo confirm is part of the authorized upload flow.
+        if PHOTO_CONFIRM_PATTERN.search(label):
+            requires_confirm = False
+        if requires_confirm and not self.policy.consume(approval_id, target):
             return {
                 "ok": False,
                 "confirmation_required": True,
@@ -1060,6 +1109,21 @@ class FormPilotTools:
                 "additionalProperties": False,
             },
             self.set_date_from_profile,
+        ))
+        registry.register(Tool(
+            "upload_from_profile",
+            "把本地资料中的文件路径上传到页面的 file 输入框（证件照用 documents.photo）。可省略 field_id，自动选本页空的 file 框；上传后如有「确认上传」请再 click_control。",
+            {
+                "type": "object",
+                "properties": {
+                    "profile_path": {"type": "string", "description": "如 documents.photo"},
+                    "field_id": {"type": ["string", "null"], "description": "可选；省略则自动选择本页 file 字段"},
+                    "approval_id": nullable_approval,
+                },
+                "required": ["profile_path", "field_id", "approval_id"],
+                "additionalProperties": False,
+            },
+            self.upload_from_profile,
         ))
         registry.register(Tool(
             "verify_field",
