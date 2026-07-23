@@ -19,7 +19,7 @@ REQUIREMENT_ALIASES: list[tuple[re.Pattern[str], tuple[str, ...]]] = [
     (re.compile(r"学籍|学籍验证|学籍在线|教育部学籍"), ("学籍", "验证报告")),
     (re.compile(r"成绩单|本科成绩"), ("成绩单",)),
     (re.compile(r"绩点|排名证明|成绩排名"), ("绩点", "排名")),
-    (re.compile(r"英语|外语成绩|四六级|雅思|托福|语言成绩"), ("英语", "外语")),
+    (re.compile(r"英语|外语|外国语|四六级|雅思|托福|语言成绩|语言能力|水平能力证明|CET|IELTS|TOEFL", re.I), ("英语", "外语", "外国语", "四六级", "雅思", "托福", "CET")),
     (re.compile(r"简历|个人简历|CV|curriculum", re.I), ("简历",)),
     (re.compile(r"奖项|获奖|竞赛|学术成果|论文|专利"), ("奖项", "学术", "成果")),
     (re.compile(r"照片|证件照|头像"), ("photo", "证件照", "照片")),

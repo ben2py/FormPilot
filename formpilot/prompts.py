@@ -29,8 +29,9 @@ SYSTEM_PROMPT = """
      1) list_local_documents 了解库存；
      2) 对每一条网页要求调用 suggest_documents_for_requirement(要求原文)；
      3) confident=true 且候选明确 → upload_local_file / upload_from_profile，**requirement 必须填网页要求原文**（写入行动日志：本地文件↔网页信息）；
+        **即使网页标「否/非必须」，只要本地有自信匹配文件也要上传**（如「外国语水平能力证明」→ documents.english / 英语成绩证明.pdf）；
      4) 若网页要求一份材料，但本地是多份相关证明才覆盖 → merge_pdfs（按合理顺序）→ preview_pdf_text 核对文本是否覆盖要求 → 再 upload_local_file；
-     5) 无匹配、多候选难分、文本核验不过、或扫描件无法确认 → pause_for_user，清楚说明缺什么/不确定什么，请人类提供或指定文件；
+     5) 必填且无匹配/多候选难分/文本核验不过 → pause_for_user；可选且确实没有对应本地文件才可跳过并在最终报告注明；
      6) 不要把身份证当成成绩单等错配；文件名与内容一般对应，以网页文案为准。
    - 必填项无法从资料可靠推出 → 调用 request_missing_profile_fields（终端向用户补齐并写回 profile.json）。
    - 补齐后再填写，确认 incomplete_required 为空，才允许点「下一步」。

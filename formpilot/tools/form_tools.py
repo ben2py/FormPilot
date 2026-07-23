@@ -36,6 +36,7 @@ ADD_ROW_PATTERN = re.compile(
     r"新增|添加|增加|增行|加一行|添加一行|增加一行|新增一行|添加成员|增加成员|新增成员|添加家庭成员|新增家庭成员",
     re.I,
 )
+FILE_PICK_PATTERN = re.compile(r"^(选择|浏览|选择文件|选择照片)$", re.I)
 
 
 class BrowserLike(Protocol):
@@ -863,6 +864,9 @@ class FormPilotTools:
             requires_confirm = False
         # Adding table rows (family/experience) is routine form editing — no human gate.
         if ADD_ROW_PATTERN.search(label):
+            requires_confirm = False
+        # Material/photo "选择" buttons are part of authorized local upload flow.
+        if FILE_PICK_PATTERN.search(label):
             requires_confirm = False
         if requires_confirm and not self.policy.consume(approval_id, target):
             return {

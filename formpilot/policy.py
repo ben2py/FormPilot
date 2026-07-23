@@ -19,8 +19,8 @@ SAFE_NAVIGATION_PATTERN = re.compile(r"^(下一步|上一步|返回|继续|下�
 # Form table edits (family/experience rows): do not bother the human.
 SAFE_TABLE_EDIT_PATTERN = re.compile(
     r"^(新增|添加|增加|增行|加一行|添加一行|增加一行|新增一行|添加成员|增加成员|新增成员|"
-    r"添加家庭成员|新增家庭成员|加号|\+|＋)$|"
-    r"新增|添加一行|增加一行|添加成员|新增成员",
+    r"添加家庭成员|新增家庭成员|加号|\+|＋|选择|浏览|选择文件|选择照片)$|"
+    r"新增|添加一行|增加一行|添加成员|新增成员|选择文件|选择照片",
     re.I,
 )
 LOGIN_URL_PATTERN = re.compile(r"logon|login|signin|sign-in|/sso\b|/auth\b", re.I)
