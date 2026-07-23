@@ -89,6 +89,31 @@ SCAN_SCRIPT = r"""
     }
     return "";
   };
+  const familyTableMeta = (el) => {
+    const td = el.closest("td, th");
+    if (!td) return null;
+    const row = td.parentElement;
+    const table = td.closest("table");
+    if (!row || !table) return null;
+    const rows = Array.from(table.querySelectorAll("tr"));
+    const headerRow = table.querySelector("thead tr") || rows.find(r => {
+      if (r.querySelector("input, select, textarea")) return false;
+      const texts = Array.from(r.children).map(c => compact(c.innerText || c.textContent, 40));
+      return texts.some(t => /姓名|关系|单位|职务|电话|手机|称谓/.test(t));
+    });
+    if (!headerRow) return null;
+    const headerJoined = Array.from(headerRow.children).map(c => compact(c.innerText || c.textContent, 40)).join("|");
+    if (!/姓名|关系|称谓/.test(headerJoined) || !/单位|职务|电话|手机/.test(headerJoined)) return null;
+    const dataRows = rows.filter(r => r !== headerRow && r.querySelector("input, select, textarea"));
+    const rowIndex = dataRows.indexOf(row);
+    if (rowIndex < 0) return null;
+    const cellIndex = Array.from(row.children).indexOf(td);
+    const headerCell = headerRow.children[cellIndex];
+    const column = headerCell
+      ? (cleanLabelText(headerCell) || compact(headerCell.innerText || headerCell.textContent, 40))
+      : "";
+    return { row_index: rowIndex + 1, column_header: column || "" };
+  };
   const tableLabel = (el) => normalizeLabel(rawTableLabel(el));
   const rawExplicitLabel = (el) => {
     if (!el.id) return "";
@@ -104,8 +129,15 @@ SCAN_SCRIPT = r"""
     return "";
   };
   const nearby = (el) => normalizeLabel(rawNearby(el));
-  const labelFor = (el) => tableLabel(el) || explicitLabel(el) || compact(el.getAttribute("aria-label")) || nearby(el)
-    || compact(el.getAttribute("placeholder")) || compact(el.name) || compact(el.id) || "未命名字段";
+  const labelFor = (el) => {
+    const familyMeta = familyTableMeta(el);
+    const base = tableLabel(el) || explicitLabel(el) || compact(el.getAttribute("aria-label")) || nearby(el)
+      || compact(el.getAttribute("placeholder")) || compact(el.name) || compact(el.id) || "未命名字段";
+    if (familyMeta && familyMeta.column_header) {
+      return `${familyMeta.column_header}（成员${familyMeta.row_index}）`;
+    }
+    return base;
+  };
   const isRequired = (el) => {
     if (el.required || el.getAttribute("aria-required") === "true") return true;
     // Prefer visible "*" next to the label — the common web convention.
@@ -228,6 +260,7 @@ SCAN_SCRIPT = r"""
         || ((disabled || readOnly) && (looksLikeCatalogPicker(el, label) || cellHasChooseLink(el)))
       );
       const needsMonth = looksLikeMonthField(el, label) && tag !== "select" && type !== "checkbox" && type !== "radio" && type !== "file";
+      const familyMeta = familyTableMeta(el);
       const fileRequired = type === "file" && (
         isRequired(el) || /照片|头像|证件照|上传|材料|附件|简历|扫描件/.test(label)
         || /照片|证件照|上传照片/.test(compact(document.body && document.body.innerText, 400))
@@ -252,6 +285,8 @@ SCAN_SCRIPT = r"""
         current_value,
         has_value,
         page_hint: page_hint || null,
+        table_row: familyMeta ? familyMeta.row_index : null,
+        column_header: familyMeta && familyMeta.column_header ? familyMeta.column_header : null,
         option_value: type === "radio" || type === "checkbox" ? String(el.value || "") : null,
         options: tag === "select" ? Array.from(el.options).slice(0, 200).map(o => ({text: compact(o.text), value: o.value, selected: o.selected, disabled: o.disabled})) : null
       };

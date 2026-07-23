@@ -177,6 +177,13 @@ class FormPilotTools:
             )
             if not sanitized.get("has_value"):
                 sanitized["disabled"] = False
+        if sanitized.get("table_row") is not None:
+            sanitized["table_row"] = sanitized.get("table_row")
+            sanitized["column_header"] = sanitized.get("column_header")
+            sanitized["fill_hint"] = (
+                "家庭成员表：优先 fill_family_from_profile 一次填完 profile.family 全部成员；"
+                "也可按「姓名（成员1）」等标签 fill_from_profile（family.member1.name 等）"
+            )
         if str(sanitized.get("type") or "").lower() == "file":
             sanitized["fill_hint"] = (
                 "材料上传：先 suggest_documents_for_requirement(页面要求文案) → "
@@ -370,6 +377,143 @@ class FormPilotTools:
         result["profile_path"] = profile_path
         result["value_privacy"] = "已使用本地资料填写；验证信息中不含原值回显"
         return result
+
+    def _family_members(self) -> list[tuple[str, dict[str, Any]]]:
+        family = self.profile.data.get("family")
+        if not isinstance(family, dict):
+            return []
+        items: list[tuple[int, str, dict[str, Any]]] = []
+        for key, value in family.items():
+            if not isinstance(value, dict):
+                continue
+            match = re.search(r"(\d+)$", str(key))
+            order = int(match.group(1)) if match else 10_000
+            items.append((order, str(key), value))
+        items.sort(key=lambda item: (item[0], item[1]))
+        return [(f"family.{key}", member) for _order, key, member in items]
+
+    @staticmethod
+    def _family_column_key(column_header: str, label: str) -> str | None:
+        text = f"{column_header or ''} {label or ''}"
+        if re.search(r"姓名|名字", text):
+            return "name"
+        if re.search(r"关系|称谓", text):
+            return "relation"
+        if re.search(r"单位|工作|职务|职业", text):
+            return "work_unit"
+        if re.search(r"电话|手机|联系", text):
+            return "phone"
+        return None
+
+    async def fill_family_from_profile(self, approval_id: str | None = None) -> dict[str, Any]:
+        """Fill every family.* member from profile into the on-page member table."""
+        members = self._family_members()
+        if not members:
+            return {
+                "ok": False,
+                "error": "profile.family 为空；请先在 profile.json 写好全部家庭成员",
+            }
+        snapshot = await self.browser.inspect()
+        fields = snapshot.get("fields") or []
+        family_fields = [
+            item for item in fields
+            if item.get("table_row") is not None
+            or re.search(r"成员\d+|姓名|关系|称谓|工作单位|电话|手机", str(item.get("label") or ""))
+        ]
+        # Prefer explicitly tagged table rows.
+        row_map: dict[int, list[dict[str, Any]]] = {}
+        for field in family_fields:
+            row = field.get("table_row")
+            if row is None:
+                match = re.search(r"成员\s*(\d+)", str(field.get("label") or ""))
+                row = int(match.group(1)) if match else None
+            if row is None:
+                continue
+            row_map.setdefault(int(row), []).append(field)
+
+        if not row_map:
+            # Fallback: group consecutive unlabeled family-like inputs into rows of 4.
+            candidates = [
+                item for item in fields
+                if re.search(r"姓名|关系|称谓|单位|职务|电话|手机", str(item.get("label") or ""))
+                and str(item.get("type") or "").lower() not in {"hidden", "file", "password"}
+            ]
+            if not candidates:
+                return {
+                    "ok": False,
+                    "error": "当前页未识别到家庭成员表格字段；请 inspect_page 确认是否在「家庭主要成员」页",
+                    "members_in_profile": [path for path, _ in members],
+                }
+            width = 4
+            for index, field in enumerate(candidates):
+                row_map.setdefault(index // width + 1, []).append(field)
+
+        filled: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        used_rows = sorted(row_map.keys())
+        for member_index, (member_path, member) in enumerate(members):
+            if member_index >= len(used_rows):
+                errors.append({
+                    "member": member_path,
+                    "error": f"页面只有 {len(used_rows)} 行，无法填入第 {member_index + 1} 位成员",
+                })
+                continue
+            row_no = used_rows[member_index]
+            for field in row_map[row_no]:
+                col_key = self._family_column_key(
+                    str(field.get("column_header") or ""),
+                    str(field.get("label") or ""),
+                )
+                if not col_key:
+                    continue
+                value = member.get(col_key)
+                if value is None or str(value).strip() == "":
+                    errors.append({
+                        "member": member_path,
+                        "field_id": field.get("field_id"),
+                        "column": col_key,
+                        "error": f"profile 缺少 {member_path}.{col_key}",
+                    })
+                    continue
+                if self.policy.secret_field(field):
+                    errors.append({
+                        "member": member_path,
+                        "field_id": field.get("field_id"),
+                        "error": "该字段被策略视为秘密字段，已跳过",
+                    })
+                    continue
+                result = await self.browser.fill(str(field["field_id"]), value)
+                verification = result.get("verification")
+                if isinstance(verification, dict):
+                    verification.pop("actual", None)
+                entry = {
+                    "ok": bool(result.get("ok")),
+                    "member": member_path,
+                    "profile_path": f"{member_path}.{col_key}",
+                    "field_id": field.get("field_id"),
+                    "label": field.get("label"),
+                    "table_row": row_no,
+                    "column": col_key,
+                    "verification": verification,
+                    "error": result.get("error"),
+                }
+                (filled if entry["ok"] else errors).append(entry)
+
+        ok = bool(filled) and not errors
+        return {
+            "ok": ok,
+            "filled_count": len(filled),
+            "error_count": len(errors),
+            "members_in_profile": [path for path, _ in members],
+            "rows_on_page": used_rows,
+            "filled": filled,
+            "errors": errors or None,
+            "value_privacy": "已按 profile.family 全部成员写入页面；结果不回传原值",
+            "hint": (
+                "若还有空行或 errors，inspect_page 后对缺项 fill_from_profile；"
+                "确认成员都填完再点下一步。"
+            ),
+        }
 
     async def fill_text(self, field_id: str, value: str, *, reason: str = "") -> dict[str, Any]:
         """Fill a non-secret field with a model-inferred or transformed value."""
@@ -646,7 +790,8 @@ class FormPilotTools:
                     "incomplete_required": incomplete,
                     "hint": (
                         "请先填完 incomplete_required；地区/学校/专业可试 select_cascade_from_profile，"
-                        "年月用 set_date_from_profile；材料用 suggest_documents_for_requirement → "
+                        "年月用 set_date_from_profile；家庭用 fill_family_from_profile；"
+                        "材料用 suggest_documents_for_requirement → "
                         "upload_local_file / merge_pdfs；"
                         "失败则 open_field → inspect_widget → "
                         "click_visible_text → confirm_overlay；资料不足则 request_missing_profile_fields。"
@@ -1102,6 +1247,19 @@ class FormPilotTools:
                 "additionalProperties": False,
             },
             self.fill_from_profile,
+        ))
+        registry.register(Tool(
+            "fill_family_from_profile",
+            "家庭主要成员页专用：把 profile.family 下全部成员（member1/member2…的姓名/关系/单位/电话）按行一次性填入。不要只填一人。",
+            {
+                "type": "object",
+                "properties": {
+                    "approval_id": nullable_approval,
+                },
+                "required": ["approval_id"],
+                "additionalProperties": False,
+            },
+            self.fill_family_from_profile,
         ))
         registry.register(Tool(
             "fill_text",

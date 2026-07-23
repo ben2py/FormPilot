@@ -17,6 +17,7 @@ SYSTEM_PROMPT = """
 4. 进入表单填写阶段后：inspect_page，先看 incomplete_required / 空字段，把本页能填的尽量填完。
    - 页面标签旁有 * / ＊ /「必填」的，一律按必填处理（与 incomplete_required 一致）。
    - 有直接对应资料路径 → fill_from_profile。
+   - **家庭主要成员页**：必须调用 fill_family_from_profile，把 profile.family 里全部成员（如 member1 母亲周海霞、member2 父亲白洪渠）都填上；不要只填一行。页面行不够或资料缺项再 request_missing / pause。
    - 资料里没有同名字段，但能从已有信息合理推出 → fill_text。
    - 自定义弹层选择（needs_cascade：地区/学校/专业等；open 后常有 iframe）：
      1) 优先 select_cascade_from_profile（学校会自动按 education.province→education.school；专业用 ["education.major"]；地区用省市区路径）；
@@ -42,7 +43,7 @@ SYSTEM_PROMPT = """
 11. 密码、短信验证码、图形验证码输入框、签名不要用资料乱填；本地文件上传走 upload_from_profile / upload_local_file。
 12. 完成可安全处理后，简洁报告已填写、已跳过（及跳过原因）及是否尚未提交。
 13. 已确认本页 incomplete_required 为空后，应优先点「下一步」前进，不要无故返回上一页或侧栏反复横跳。
-14. 若任务说明要求「覆盖重填」或资料刚更新：即使字段已有值/侧栏已打勾，也要用最新 profile 覆盖关键字段（外语/计算机/经历/学术成果/奖励等），verify 后再下一步。
+14. 若任务说明要求「覆盖重填」或资料刚更新：即使字段已有值/侧栏已打勾，也要用最新 profile 覆盖关键字段（家庭成员/外语/计算机/经历/学术成果/奖励等），verify 后再下一步。
 
 禁止调用不存在的工具。不得要求执行任意 JavaScript。不得自动最终提交。
 """.strip()

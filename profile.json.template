@@ -63,10 +63,16 @@
   },
   "family": {
     "member1": {
-      "name": "示例亲属",
+      "name": "示例母亲",
       "relation": "母亲",
-      "work_unit": "示例单位",
-      "phone": "13800138000"
+      "work_unit": "示例单位A",
+      "phone": "13800138001"
+    },
+    "member2": {
+      "name": "示例父亲",
+      "relation": "父亲",
+      "work_unit": "示例单位B",
+      "phone": "13800138002"
     }
   },
   "language": {
