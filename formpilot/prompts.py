@@ -25,14 +25,11 @@ SYSTEM_PROMPT = """
      3) 不要点「清除/关闭」，未选完前不要 dismiss_page_overlays；不要对「选择」做整页 ambiguous 盲点。
    - 年月字段（needs_month / 入学年月 / 预计毕业年月）：用 set_date_from_profile（education.enrollment_date / education.graduation_date，支持 yyyy-MM），不要 fill_text。
    - 照片：documents.photo 用 upload_from_profile，并传 requirement=网页照片要求原文；成功后若有「确认上传」再 click_control。
-   - 上传材料页（多个材料名/说明 + file）：必须严格按网页要求匹配本地文件，禁止随便上传无关文件：
-     1) list_local_documents 了解库存；
-     2) 对每一条网页要求调用 suggest_documents_for_requirement(要求原文)；
-     3) confident=true 且候选明确 → upload_local_file / upload_from_profile，**requirement 必须填网页要求原文**（写入行动日志：本地文件↔网页信息）；
-        **即使网页标「否/非必须」，只要本地有自信匹配文件也要上传**（如「外国语水平能力证明」→ documents.english / 英语成绩证明.pdf）；
-     4) 若网页要求一份材料，但本地是多份相关证明才覆盖 → merge_pdfs（按合理顺序）→ preview_pdf_text 核对文本是否覆盖要求 → 再 upload_local_file；
-     5) 必填且无匹配/多候选难分/文本核验不过 → pause_for_user；可选且确实没有对应本地文件才可跳过并在最终报告注明；
-     6) 不要把身份证当成成绩单等错配；文件名与内容一般对应，以网页文案为准。
+   - 上传材料页（多个材料名/说明 + file）：优先调用 **upload_materials_from_profile**（扫表批量上传，含可选材料）：
+     - 「外国语水平能力证明」即使标「否」也必须上传 `documents.english` / `英语成绩证明.pdf`；
+     - 若返回 language_pending 非空，禁止点下一步，继续上传或 pause；
+     - 也可 list_local_documents → suggest → upload_local_file；合并用 merge_pdfs + preview_pdf_text；
+     - 不要把身份证当成成绩单；不要因为工具返回 has_value=false 就认定失败——若页面行已显示「已上传」即成功。
    - 必填项无法从资料可靠推出 → 调用 request_missing_profile_fields（终端向用户补齐并写回 profile.json）。
    - 补齐后再填写，确认 incomplete_required 为空，才允许点「下一步」。
 5. 禁止在仍有必填空项时点击「下一步」。若 click_control 返回 blocked，按 hint 处理，不要硬点。

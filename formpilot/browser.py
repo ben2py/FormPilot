@@ -1908,18 +1908,111 @@ class PlaywrightFormBrowser:
         if str(field.get("type") or "").lower() != "file":
             return {"ok": False, "error": "目标不是 file 输入框", "field_id": field_id, "type": field.get("type")}
         await locator.set_input_files(str(file_path))
-        await self.page.wait_for_timeout(300)
-        # Re-inspect to confirm files were attached.
+        # Tongji often auto-POSTs on change then clears the input; watch row status text.
+        uploaded_status = False
+        page_messages: list[str] = []
+        for _ in range(15):
+            await self.page.wait_for_timeout(200)
+            status = await self.page.evaluate(
+                """(fid) => {
+                  const el = document.querySelector(`[data-formpilot-id="${fid}"]`);
+                  if (!el) return {has_files: false, row_status: '', messages: []};
+                  const row = el.closest('tr') || el.closest('.layui-form-item') || el.parentElement;
+                  const text = String((row && row.innerText) || '').replace(/\\s+/g, ' ').trim();
+                  const msgs = Array.from(document.querySelectorAll(
+                    '.layui-layer-msg, .layui-layer-dialog .layui-layer-content, [role="alert"]'
+                  )).map(n => String(n.innerText || n.textContent || '').replace(/\\s+/g,' ').trim())
+                    .filter(Boolean).slice(0, 5);
+                  return {
+                    has_files: Boolean(el.files && el.files.length > 0),
+                    row_status: /已上传/.test(text) ? '已上传' : (/未上传/.test(text) ? '未上传' : ''),
+                    row_text: text.slice(0, 160),
+                    messages: msgs,
+                  };
+                }""",
+                field_id,
+            )
+            if isinstance(status, dict):
+                page_messages = list(status.get("messages") or [])[:5]
+                if status.get("row_status") == "已上传" or status.get("has_files"):
+                    uploaded_status = True
+                    break
+                if any(re.search(r"成功|完成", str(m)) for m in page_messages):
+                    uploaded_status = True
+                    break
+                if any(re.search(r"失败|错误|过大|格式", str(m)) for m in page_messages):
+                    return {
+                        "ok": False,
+                        "field_id": field_id,
+                        "has_value": False,
+                        "file_name": file_path.name,
+                        "page_messages": page_messages,
+                        "error": page_messages[0] if page_messages else "上传失败",
+                    }
         snapshot = await self.inspect()
         updated = next((item for item in snapshot["fields"] if item["field_id"] == field_id), None)
         has_value = bool(updated and updated.get("has_value"))
-        return {
-            "ok": has_value,
+        ok = bool(has_value or uploaded_status)
+        result: dict[str, Any] = {
+            "ok": ok,
             "field_id": field_id,
             "has_value": has_value,
+            "uploaded_status": uploaded_status,
             "file_name": file_path.name,
-            "hint": "若页面有「确认上传」按钮，请接着 click_control 提交文件",
+            "hint": (
+                "页面已显示已上传（file 输入框可能被清空，属正常）"
+                if uploaded_status and not has_value
+                else "若页面有「确认上传」按钮，请接着 click_control 提交文件"
+            ),
         }
+        if page_messages:
+            result["page_messages"] = page_messages
+        return result
+
+    async def scan_material_rows(self) -> dict[str, Any]:
+        """Parse the 上传材料 table: requirement, required flag, status, file field_id."""
+        rows = await self.page.evaluate(
+            r"""() => {
+              const compact = (s, n=120) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n);
+              const out = [];
+              const files = Array.from(document.querySelectorAll('input[type=file]'));
+              files.forEach((el, index) => {
+                const row = el.closest('tr') || el.closest('li') || el.closest('.layui-form-item') || el.parentElement;
+                if (!row) return;
+                const text = compact(row.innerText || row.textContent, 400);
+                const cells = Array.from(row.querySelectorAll('td, th')).map(c => compact(c.innerText || c.textContent, 80));
+                let requirement = '';
+                // Prefer 材料说明 cell (often longer descriptive text).
+                const desc = cells.find(t => /身份证|成绩单|学籍|外语|外国语|英语|简历|奖项|学术|证明|报告|材料/.test(t) && t.length >= 4) || '';
+                const nameCell = cells.find(t => /身份证|成绩单|学籍|外语|外国语|简历|奖项|学术成果/.test(t) && t.length <= 40) || '';
+                requirement = desc || nameCell || compact(el.getAttribute('aria-label') || el.title || '', 80);
+                if (!requirement) {
+                  const btn = row.querySelector('input[type=button], button, a');
+                  requirement = compact(btn && (btn.value || btn.innerText), 80);
+                }
+                const required = /是否必须上传[^是]*是|^\s*是\s*$/.test(text)
+                  || cells.some((t, i) => t === '是' && i >= 2 && i <= 5)
+                  || Boolean(el.required);
+                // "否" in required column means optional.
+                const optionalMarked = cells.some((t, i) => t === '否' && i >= 2 && i <= 5);
+                const uploaded = /已上传/.test(text) && !/未上传[^已]*$/.test(text);
+                const status = uploaded ? '已上传' : (/未上传/.test(text) ? '未上传' : '');
+                const fid = el.getAttribute('data-formpilot-id') || '';
+                out.push({
+                  index: index + 1,
+                  field_id: fid,
+                  requirement: requirement || `材料${index + 1}`,
+                  required: optionalMarked ? false : required,
+                  status,
+                  uploaded,
+                  row_text: text.slice(0, 200),
+                });
+              });
+              return out;
+            }"""
+        )
+        return {"ok": True, "count": len(rows or []), "materials": rows or []}
+
 
     async def click(self, control_id: str) -> dict[str, Any]:
         snapshot = await self.inspect()

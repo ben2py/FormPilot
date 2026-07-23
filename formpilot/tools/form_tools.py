@@ -774,9 +774,9 @@ class FormPilotTools:
             "count": len(docs),
             "documents": docs,
             "hint": (
-                "上传材料页：对每个网页要求调用 suggest_documents_for_requirement；"
-                "匹配自信再 upload_local_file；需合并则 merge_pdfs + preview_pdf_text；"
-                "没有或不确定则 pause_for_user。"
+                "上传材料页优先 upload_materials_from_profile（会扫表并上传全部可匹配项，"
+                "含可选的外国语水平能力证明→英语成绩证明.pdf）；"
+                "不要漏掉可选但本地有文件的材料。"
             ),
         }
 
@@ -788,6 +788,156 @@ class FormPilotTools:
 
     async def preview_pdf_text(self, path: str, max_chars: int = 4000) -> dict[str, Any]:
         return preview_pdf_text(path, max_chars=max(500, min(int(max_chars or 4000), 12000)))
+
+    async def scan_material_rows(self) -> dict[str, Any]:
+        await self.browser.inspect()  # ensure data-formpilot-id attributes exist
+        if hasattr(self.browser, "scan_material_rows"):
+            return await self.browser.scan_material_rows()
+        return {"ok": False, "error": "当前浏览器未实现 scan_material_rows"}
+
+    async def upload_materials_from_profile(self, approval_id: str | None = None) -> dict[str, Any]:
+        """Scan 上传材料 table and upload every row that has a confident local match.
+
+        Includes optional rows (e.g. 外国语水平能力证明) when a local PDF matches.
+        """
+        await self.browser.inspect()
+        if not hasattr(self.browser, "scan_material_rows"):
+            return {"ok": False, "error": "当前浏览器未实现 scan_material_rows"}
+        scanned = await self.browser.scan_material_rows()
+        materials = list(scanned.get("materials") or [])
+        if not materials:
+            return {
+                "ok": False,
+                "error": "未识别到上传材料表格；请确认当前在「上传材料」页",
+                "hint": "先 inspect_page，再调用本工具",
+            }
+
+        uploaded: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+
+        for item in materials:
+            requirement = str(item.get("requirement") or "").strip()
+            field_id = str(item.get("field_id") or "").strip()
+            if item.get("uploaded") or item.get("status") == "已上传":
+                skipped.append({
+                    "requirement": requirement,
+                    "field_id": field_id,
+                    "reason": "页面已显示已上传",
+                })
+                continue
+            if not field_id:
+                failed.append({"requirement": requirement, "error": "无 file 字段 id"})
+                continue
+
+            suggestion = suggest_documents_for_requirement(requirement)
+            matches = list(suggestion.get("matches") or [])
+            # Hard fallback for language proof ↔ documents.english / 英语成绩证明.
+            if not matches and re.search(r"外国语|外语|英语|语言.*证明|CET|IELTS|TOEFL", requirement, re.I):
+                try:
+                    eng = str(self.profile.get("documents.english"))
+                    matches = [{"path": eng, "name": Path(eng).name, "score": 100}]
+                    suggestion = {**suggestion, "confident": True, "matches": matches}
+                except KeyError:
+                    pass
+
+            if not matches:
+                if item.get("required"):
+                    failed.append({
+                        "requirement": requirement,
+                        "field_id": field_id,
+                        "error": "必填但无本地自信匹配；请 pause_for_user",
+                    })
+                else:
+                    skipped.append({
+                        "requirement": requirement,
+                        "field_id": field_id,
+                        "reason": "可选且无本地匹配",
+                    })
+                continue
+
+            is_language = bool(re.search(r"外国语|外语|英语|语言", requirement))
+            top = matches[0]
+            if not suggestion.get("confident") and not is_language:
+                if item.get("required"):
+                    failed.append({
+                        "requirement": requirement,
+                        "field_id": field_id,
+                        "error": "匹配不自信，需人工确认",
+                        "candidates": [m.get("name") for m in matches[:3]],
+                    })
+                else:
+                    skipped.append({
+                        "requirement": requirement,
+                        "reason": "可选且匹配不自信",
+                        "candidates": [m.get("name") for m in matches[:3]],
+                    })
+                continue
+
+            path = str(top.get("path") or "")
+            if not path:
+                failed.append({"requirement": requirement, "error": "候选无路径"})
+                continue
+            if not hasattr(self.browser, "upload_file"):
+                return {"ok": False, "error": "当前浏览器不支持 upload_file"}
+            result = await self.browser.upload_file(field_id, path)
+            entry = {
+                "requirement": requirement,
+                "field_id": field_id,
+                "path": path,
+                "file_name": Path(path).name,
+                "required": bool(item.get("required")),
+                "ok": bool(result.get("ok")),
+                "uploaded_status": result.get("uploaded_status"),
+                "page_messages": result.get("page_messages"),
+                "error": result.get("error"),
+                "upload_log": {
+                    "file": Path(path).name,
+                    "local_path": path,
+                    "requirement": requirement,
+                    "ok": bool(result.get("ok")),
+                },
+            }
+            if entry["ok"]:
+                uploaded.append(entry)
+            else:
+                failed.append(entry)
+            await self.browser.wait_and_rescan(400)
+
+        # Re-scan to report remaining gaps (especially language proof).
+        await self.browser.inspect()
+        after = await self.browser.scan_material_rows()
+        pending = [
+            {
+                "requirement": m.get("requirement"),
+                "required": m.get("required"),
+                "status": m.get("status"),
+            }
+            for m in (after.get("materials") or [])
+            if not m.get("uploaded")
+        ]
+        language_pending = [
+            p for p in pending
+            if re.search(r"外国语|外语|英语|语言", str(p.get("requirement") or ""))
+        ]
+        ok = not failed and not language_pending
+        return {
+            "ok": ok,
+            "uploaded_count": len(uploaded),
+            "skipped_count": len(skipped),
+            "failed_count": len(failed),
+            "uploaded": uploaded,
+            "skipped": skipped,
+            "failed": failed or None,
+            "pending_after": pending,
+            "language_pending": language_pending or None,
+            "hint": (
+                "若 language_pending 非空，必须再上传 documents.english / 英语成绩证明.pdf；"
+                "required 的 failed 需 pause_for_user；全部完成后再点下一步。"
+                if language_pending or failed
+                else "材料行已尽量上传（含可选外国语证明）；可 inspect 确认后下一步。"
+            ),
+        }
 
     async def upload_local_file(
         self,
@@ -851,12 +1001,48 @@ class FormPilotTools:
                     "hint": (
                         "请先填完 incomplete_required；地区/学校/专业可试 select_cascade_from_profile，"
                         "年月用 set_date_from_profile；家庭用 fill_family_from_profile；"
-                        "材料用 suggest_documents_for_requirement → "
-                        "upload_local_file / merge_pdfs；"
+                        "材料用 upload_materials_from_profile（含可选外国语证明）；"
                         "失败则 open_field → inspect_widget → "
                         "click_visible_text → confirm_overlay；资料不足则 request_missing_profile_fields。"
                     ),
                 }
+            # Materials page: do not leave while 外国语证明 is still 未上传 and we have the PDF.
+            file_fields = [
+                f for f in (snapshot.get("fields") or [])
+                if str(f.get("type") or "").lower() == "file"
+            ]
+            if len(file_fields) >= 2 and hasattr(self.browser, "scan_material_rows"):
+                try:
+                    scanned = await self.browser.scan_material_rows()
+                except Exception:
+                    scanned = {}
+                language_pending = [
+                    m for m in (scanned.get("materials") or [])
+                    if not m.get("uploaded")
+                    and re.search(r"外国语|外语|英语|语言", str(m.get("requirement") or ""))
+                ]
+                has_english = False
+                try:
+                    eng = str(self.profile.get("documents.english") or "")
+                    has_english = bool(eng) and Path(eng).expanduser().exists()
+                except KeyError:
+                    has_english = any(
+                        Path("personal_info/PDF/英语成绩证明.pdf").exists(),
+                    )
+                if language_pending and has_english:
+                    return {
+                        "ok": False,
+                        "blocked": True,
+                        "error": "外国语水平能力证明仍未上传，禁止下一步",
+                        "language_pending": [
+                            {"requirement": m.get("requirement"), "field_id": m.get("field_id")}
+                            for m in language_pending
+                        ],
+                        "hint": (
+                            "请先 upload_materials_from_profile，或 upload_local_file "
+                            "path=personal_info/PDF/英语成绩证明.pdf / documents.english"
+                        ),
+                    }
         target = f"click:{snapshot['url']}:{control_id}"
         requires_confirm = self.policy.click_requires_confirmation(control)
         # Local photo confirm is part of the authorized upload flow.
@@ -1517,6 +1703,23 @@ class FormPilotTools:
             "列出 personal_info/ 与 personal_info/PDF/ 下可用的本地材料（PDF/图片路径与文件名）。进入上传材料页时先调用。",
             empty,
             self.list_local_documents,
+        ))
+        registry.register(Tool(
+            "scan_material_rows",
+            "扫描上传材料表格：每行的材料名、是否必填、已上传/未上传、对应 file 字段。",
+            empty,
+            self.scan_material_rows,
+        ))
+        registry.register(Tool(
+            "upload_materials_from_profile",
+            "上传材料页主工具：扫表后按网页要求匹配并上传本地 PDF；含可选的「外国语水平能力证明」→英语成绩证明.pdf。进入该页应优先调用，勿漏传。",
+            {
+                "type": "object",
+                "properties": {"approval_id": nullable_approval},
+                "required": ["approval_id"],
+                "additionalProperties": False,
+            },
+            self.upload_materials_from_profile,
         ))
         registry.register(Tool(
             "suggest_documents_for_requirement",

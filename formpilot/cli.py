@@ -20,8 +20,8 @@ DEFAULT_GOAL = (
     "读取任务文档与本地个人资料（含具体值），自主导航到报名信息填写页；"
     "inspect 后先填完本页必填项再点下一步；能匹配的用资料填写，能推理的用 fill_text；"
     "资料不足时用 request_missing_profile_fields 在终端向我补齐并写回 profile.json；"
-    "上传材料页用 list_local_documents / suggest_documents_for_requirement 严格匹配本地 PDF，"
-    "需合并则 merge_pdfs + preview_pdf_text，匹配不上则 pause_for_user；"
+    "上传材料页用 upload_materials_from_profile 扫表上传（含可选外国语水平→英语成绩证明），"
+    "匹配不上则 pause_for_user；"
     "仅在登录短信验证码、签名/材料缺失或最终提交时让我接管。"
 )
 

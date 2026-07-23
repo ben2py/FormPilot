@@ -71,6 +71,12 @@ class RunLogger:
                     "page_messages",
                     "dialogs",
                     "url_changed",
+                    "uploaded",
+                    "skipped",
+                    "failed",
+                    "pending_after",
+                    "language_pending",
+                    "uploaded_count",
                     "field_id",
                     "file_name",
                     "local_path",
@@ -92,6 +98,23 @@ class RunLogger:
         self.event("tool", step=step, name=name, arguments=arguments, result=summary)
         if name in {"upload_from_profile", "upload_local_file"} and isinstance(result, dict):
             self.upload(step=step, tool=name, result=result, arguments=arguments)
+        if name == "upload_materials_from_profile" and isinstance(result, dict):
+            for item in result.get("uploaded") or []:
+                if not isinstance(item, dict):
+                    continue
+                self.upload(
+                    step=step,
+                    tool=name,
+                    result={
+                        "ok": item.get("ok"),
+                        "file_name": item.get("file_name"),
+                        "local_path": item.get("path"),
+                        "requirement": item.get("requirement"),
+                        "field_id": item.get("field_id"),
+                        "has_value": item.get("ok"),
+                    },
+                    arguments={"requirement": item.get("requirement"), "path": item.get("path")},
+                )
 
     def upload(
         self,
