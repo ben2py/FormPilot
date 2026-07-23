@@ -41,7 +41,14 @@ PROFILE_LABELS = {
     "application.batch": "招生批次",
     "application.mode": "招生方式",
     "application.program": "报考专业",
+    "application.preference": "申请倾向说明",
     "documents.photo": "证件照片本地路径",
+    "language.cet4": "英语四级成绩",
+    "language.cet6": "英语六级成绩",
+    "language.ielts": "雅思成绩",
+    "language.summary": "外语水平摘要",
+    "computer.proof": "计算机水平证明",
+    "computer.certificate": "计算机证书",
 }
 
 HIGH_RISK_PATHS = {
