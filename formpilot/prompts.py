@@ -18,10 +18,11 @@ SYSTEM_PROMPT = """
    - 页面标签旁有 * / ＊ /「必填」的，一律按必填处理（与 incomplete_required 一致）。
    - 有直接对应资料路径 → fill_from_profile。
    - 资料里没有同名字段，但能从已有信息合理推出 → fill_text。
-   - 自定义弹层/地区选择（needs_cascade 或 open 后出现 iframe）：
-     1) 优先 select_cascade_from_profile（会自动搜索树并点叶子节点，再点确定）；
-     2) 失败则：open_field → inspect_widget → click_visible_text（where=iframe）逐级点省/市/区 → confirm_overlay；
-     3) 不要点「清除/关闭」，未选完前不要 dismiss_page_overlays；同名节点优先点叶子，不要反复点同一个 option_id。
+   - 自定义弹层选择（needs_cascade：地区/学校/专业等；open 后常有 iframe）：
+     1) 优先 select_cascade_from_profile（学校/专业可只传 ["education.school"] 或 ["education.major"]；会自动搜索树并点叶子，再确定）；
+     2) 失败则：open_field（会点同格/同行「选择」）→ inspect_widget → click_visible_text（where=iframe）→ confirm_overlay；
+     3) 不要点「清除/关闭」，未选完前不要 dismiss_page_overlays；不要对「选择」做整页 ambiguous 盲点。
+   - 年月字段（needs_month / 入学年月 / 预计毕业年月）：用 set_date_from_profile（education.enrollment_date / education.graduation_date，支持 yyyy-MM），不要 fill_text。
    - 必填项无法从资料可靠推出 → 调用 request_missing_profile_fields（终端向用户补齐并写回 profile.json）。
    - 补齐后再填写，确认 incomplete_required 为空，才允许点「下一步」。
 5. 禁止在仍有必填空项时点击「下一步」。若 click_control 返回 blocked，按 hint 处理，不要硬点。

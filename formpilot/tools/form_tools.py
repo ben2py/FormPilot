@@ -128,13 +128,33 @@ class FormPilotTools:
             needs_cascade = True
         if sanitized.get("read_only") and re.search(r"出生地|籍贯|户口|所在地|省市|地区|归属地", label):
             needs_cascade = True
+        if re.search(r"所在学校|毕业院校|学校名称|所在专业|所学专业|专业名称|本科院校", label):
+            needs_cascade = True
+        if (sanitized.get("disabled") or sanitized.get("read_only")) and re.search(
+            r"bkbydw|bkbyzy|bydw|byzy|Show$", str(sanitized.get("id") or "") + str(sanitized.get("name") or ""), re.I
+        ):
+            needs_cascade = True
+        needs_month = bool(sanitized.get("needs_month"))
+        if re.search(r"入学年月|毕业年月|预计毕业", label) or (
+            re.search(r"年月", label) and not re.search(r"日", label.replace("年月", ""))
+        ):
+            needs_month = True
         if needs_cascade:
             sanitized["needs_cascade"] = True
             sanitized["fill_hint"] = (
-                "优先 select_cascade_from_profile；失败则 open_field → inspect_widget → "
-                "click_visible_text(省/市/区) → confirm_overlay"
+                "优先 select_cascade_from_profile（学校/专业可只传单路径如 education.school）；"
+                "失败则 open_field（会点同格「选择」）→ inspect_widget → "
+                "click_visible_text → confirm_overlay"
             )
-            # Disabled region display boxes still need to be filled via cascade.
+            # Disabled region/catalog display boxes still need to be filled via cascade.
+            if not sanitized.get("has_value"):
+                sanitized["disabled"] = False
+        if needs_month:
+            sanitized["needs_month"] = True
+            sanitized["fill_hint"] = (
+                "优先 set_date_from_profile（入学用 education.enrollment_date，"
+                "毕业用 education.graduation_date；支持 yyyy-MM）"
+            )
             if not sanitized.get("has_value"):
                 sanitized["disabled"] = False
         return sanitized
@@ -145,9 +165,11 @@ class FormPilotTools:
         for field in fields:
             if not isinstance(field, dict):
                 continue
-            # Readonly cascade pickers (出生地/籍贯/户口等) must still be required-checked.
-            # Only skip truly inert disabled controls (not picker-style readonly fields).
-            if field.get("disabled") and not (field.get("read_only") or field.get("needs_cascade")):
+            # Readonly cascade/month pickers must still be required-checked.
+            # Only skip truly inert disabled controls (not picker-style fields).
+            if field.get("disabled") and not (
+                field.get("read_only") or field.get("needs_cascade") or field.get("needs_month")
+            ):
                 continue
             if str(field.get("type") or "").lower() in SKIP_REQUIRED_TYPES:
                 continue
@@ -167,6 +189,11 @@ class FormPilotTools:
                 item["fill_hint"] = field.get("fill_hint") or (
                     "select_cascade_from_profile，或 open_field → inspect_widget → "
                     "click_visible_text → confirm_overlay"
+                )
+            if field.get("needs_month"):
+                item["needs_month"] = True
+                item["fill_hint"] = field.get("fill_hint") or (
+                    "set_date_from_profile（education.enrollment_date / education.graduation_date）"
                 )
             incomplete.append(item)
         return incomplete
@@ -405,9 +432,9 @@ class FormPilotTools:
                     "error": "还有必填项未填写，禁止点击下一步",
                     "incomplete_required": incomplete,
                     "hint": (
-                        "请先填完 incomplete_required；地区项可试 select_cascade_from_profile，"
-                        "失败则 open_field → inspect_widget → click_visible_text → confirm_overlay；"
-                        "资料不足则 request_missing_profile_fields。"
+                        "请先填完 incomplete_required；地区/学校/专业可试 select_cascade_from_profile，"
+                        "年月用 set_date_from_profile；失败则 open_field → inspect_widget → "
+                        "click_visible_text → confirm_overlay；资料不足则 request_missing_profile_fields。"
                     ),
                 }
         target = f"click:{snapshot['url']}:{control_id}"
@@ -962,7 +989,7 @@ class FormPilotTools:
         ))
         registry.register(Tool(
             "select_cascade_from_profile",
-            "便捷工具：按资料路径尝试自动逐级选择地区。失败时不要死磕，改用 open_field + inspect_widget + click_visible_text + confirm_overlay 由你决策。",
+            "便捷工具：按资料路径自动在弹层/iframe 中选择（地区省市区，或学校/专业等单关键字）。失败时改用 open_field + inspect_widget + click_visible_text + confirm_overlay。",
             {
                 "type": "object",
                 "properties": {
@@ -977,7 +1004,7 @@ class FormPilotTools:
         ))
         registry.register(Tool(
             "set_date_from_profile",
-            "设置原生或自定义日期字段。自定义日历会读取当前年月并有限次点击上一年/下一年/上一月/下一月后选择日期。",
+            "设置日期或年月字段。支持 yyyy-MM / yyyy-MM-dd；只读 WdatePicker/laydate 会尝试直接写入。入学年月用 education.enrollment_date，毕业年月用 education.graduation_date。",
             {
                 "type": "object",
                 "properties": {

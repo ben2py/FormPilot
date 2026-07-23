@@ -28,7 +28,7 @@ class FormPilotAgent:
         model: AgentModel,
         tools: ToolRegistry,
         *,
-        max_steps: int = 30,
+        max_steps: int = 80,
         trace: TraceHandler | None = None,
         run_logger: Any | None = None,
     ) -> None:
@@ -203,4 +203,13 @@ class FormPilotAgent:
                         }
                     )
 
-        raise RuntimeError(f"Agent 超过最大工具调用轮数 {self.max_steps}，已安全停止")
+        self._log(f"Agent 超过最大工具调用轮数 {self.max_steps}，已安全停止")
+        message = f"Agent 超过最大工具调用轮数 {self.max_steps}，已安全停止（未崩溃）。可提高 FORMPILOT_MAX_STEPS 后继续。"
+        if self.run_logger is not None:
+            self.run_logger.event("max_steps", max_steps=self.max_steps)
+        return AgentResult(
+            text=message,
+            steps=self.max_steps,
+            tool_calls=history,
+            log_path=str(self.run_logger.path) if self.run_logger is not None else None,
+        )

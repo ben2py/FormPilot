@@ -147,6 +147,33 @@ SCAN_SCRIPT = r"""
     return /^(csd|csdm|jg|jgm|hkszd|daszd|sysd)(_|$)/i.test(`${el.id || ""}_${el.name || ""}`)
       || /\b(csd|csdm|jgm|hkszd|daszd|sysd|area|region|cascade|picker|distpicker)\b/i.test(blob);
   };
+  const cellHasChooseLink = (el) => {
+    const scopes = [
+      el.closest("td, th, .layui-form-item, .form-group, .el-form-item"),
+      el.closest("tr"),
+    ].filter(Boolean);
+    for (const scope of scopes) {
+      const nodes = scope.querySelectorAll("a, button, input[type='button'], span, [onclick]");
+      for (const node of nodes) {
+        const text = compact(node.innerText || node.value || node.title || "");
+        if (/^(选择|查询|浏览|挑选)$/.test(text) || /^选择/.test(text) && text.length <= 6) return true;
+      }
+    }
+    return false;
+  };
+  const looksLikeCatalogPicker = (el, label) => {
+    const text = String(label || "");
+    if (/所在学校|毕业院校|学校名称|所在专业|所学专业|专业名称|报考单位|本科院校/.test(text)) return true;
+    const blob = `${el.id || ""} ${el.name || ""}`;
+    return /bkbydw|bydw|bkbyzy|byzy|yxdm|zydm|xxdm/i.test(blob) || /Show$/i.test(el.id || "");
+  };
+  const looksLikeMonthField = (el, label) => {
+    const text = String(label || "");
+    if (/入学年月|毕业年月|预计毕业|入学时间|毕业时间/.test(text) && !/日/.test(text.replace(/年月/g, ""))) return true;
+    if (/年月/.test(text)) return true;
+    const blob = `${el.id || ""} ${el.name || ""} ${el.getAttribute("onclick") || ""} ${el.className || ""}`;
+    return /\b(rxny|byny|byrq|rxrq|Wdate|laydate|yyyy-MM)\b/i.test(blob);
+  };
 
   const fields = Array.from(document.querySelectorAll("input, select, textarea, [contenteditable='true']"))
     .filter(visible).slice(0, 300).map(el => {
@@ -162,14 +189,19 @@ SCAN_SCRIPT = r"""
       }
       const readOnly = Boolean(el.readOnly);
       const disabled = Boolean(el.disabled);
-      // Tongji region widgets are often disabled/readonly text boxes; the real opener is nearby.
-      const needsCascade = looksLikeRegionPicker(el, label) && tag !== "select" && type !== "checkbox" && type !== "radio";
+      // Tongji region/school/major widgets are often disabled/readonly; real opener is nearby「选择」.
+      const needsCascade = tag !== "select" && type !== "checkbox" && type !== "radio" && (
+        looksLikeRegionPicker(el, label)
+        || ((disabled || readOnly) && (looksLikeCatalogPicker(el, label) || cellHasChooseLink(el)))
+      );
+      const needsMonth = looksLikeMonthField(el, label) && tag !== "select" && type !== "checkbox" && type !== "radio";
       return {
         field_id: idFor(el, "field"), tag, type, id: el.id || "", name: el.name || "",
         label, placeholder: el.getAttribute("placeholder") || "",
         required: isRequired(el),
         disabled, read_only: readOnly,
         needs_cascade: needsCascade,
+        needs_month: needsMonth,
         current_value,
         has_value,
         option_value: type === "radio" || type === "checkbox" ? String(el.value || "") : null,
@@ -233,6 +265,8 @@ WIDGET_SCAN_SCRIPT = r"""
     "[class*='cascader-panel']", "[class*='picker-panel']", "[class*='picker-dropdown']",
     "[class*='date-panel']", "[class*='calendar-panel']", "[class*='calendar-popover']",
     ".layui-layer", ".layui-layer-content", ".layui-anim", ".layui-tree",
+    ".layui-laydate", "[id^='layui-laydate']",
+    ".WdateDiv", "#_my97DP", "[class*='Wdate']",
     "[class*='city-picker']", "[class*='area-picker']", "[class*='region-picker']",
     "[class*='distpicker']", ".xm-select-dl", "[class*='cascade']"
   ].join(",");
@@ -1106,11 +1140,21 @@ class PlaywrightFormBrowser:
             return {
                 "ok": False,
                 "error": (
-                    "该字段是地区级联选择器：请用 select_cascade_from_profile，"
+                    "该字段是弹层选择器（地区/学校/专业等）：请用 select_cascade_from_profile，"
                     "或 open_field → inspect_widget → click_visible_text → confirm_overlay"
                 ),
                 "field_id": field_id,
                 "needs_cascade": True,
+            }
+        if field.get("needs_month") or (
+            (field.get("disabled") or field.get("read_only"))
+            and re.search(r"入学年月|毕业年月|预计毕业|年月", str(field.get("label") or ""))
+        ):
+            return {
+                "ok": False,
+                "error": "该字段是年月选择器：请用 set_date_from_profile（支持 yyyy-MM）",
+                "field_id": field_id,
+                "needs_month": True,
             }
         if field["disabled"] or field["read_only"]:
             return {"ok": False, "error": "字段不可编辑", "field": field}
@@ -1178,13 +1222,19 @@ class PlaywrightFormBrowser:
 
     async def open_field(self, field_id: str) -> dict[str, Any]:
         locator, field = await self._field(field_id)
-        regionish = bool(field.get("needs_cascade")) or bool(
-            re.search(r"出生地|籍贯|户口所在地|档案所在地|生源地|所在地区", str(field.get("label") or ""))
+        pickerish = bool(field.get("needs_cascade")) or bool(
+            re.search(
+                r"出生地|籍贯|户口所在地|档案所在地|生源地|所在地区|所在学校|所在专业|毕业院校|所学专业",
+                str(field.get("label") or ""),
+            )
         )
-        # Disabled/readonly region pickers are opened via nearby triggers, not typed into.
-        if field.get("disabled") and not regionish and not field.get("read_only"):
+        monthish = bool(field.get("needs_month")) or bool(
+            re.search(r"入学年月|毕业年月|预计毕业|年月", str(field.get("label") or ""))
+        )
+        # Disabled/readonly pickers are opened via nearby triggers, not typed into.
+        if field.get("disabled") and not pickerish and not field.get("read_only") and not monthish:
             return {"ok": False, "error": "字段不可交互", "field_id": field_id}
-        if regionish:
+        if pickerish:
             # Avoid stacking multiple area iframes from previous failed attempts.
             closer = getattr(self, "close_layui_layers", None)
             if callable(closer):
@@ -1202,21 +1252,25 @@ class PlaywrightFormBrowser:
               const el = document.querySelector(`[data-formpilot-id="${id}"]`);
               if (!el) return {ok: false, reason: 'missing'};
               const cell = el.closest('td, th, .layui-form-item, .form-group, .el-form-item') || el.parentElement;
+              const row = el.closest('tr');
               const scoreNode = (node) => {
                 if (!node || node === el) return -1;
-                const text = `${node.innerText || ''} ${node.value || ''} ${node.title || ''} ${node.className || ''} ${node.getAttribute('onclick') || ''} ${node.id || ''}`;
+                const raw = String(node.innerText || node.value || node.title || '').replace(/\\s+/g, ' ').trim();
+                const text = `${raw} ${node.className || ''} ${node.getAttribute('onclick') || ''} ${node.id || ''}`;
                 let score = 0;
+                if (/^(选择|查询|浏览|挑选)$/.test(raw)) score += 100;
                 if (/选择|请选择|选区|地区|省市/.test(text)) score += 50;
-                if (/area|region|city|csd|jg|dq|picker|cascade/i.test(text)) score += 30;
+                if (/area|region|city|csd|jg|dq|picker|cascade|Wdate|laydate/i.test(text)) score += 30;
                 if (node.tagName === 'A' || node.tagName === 'BUTTON') score += 20;
                 if (node.getAttribute('onclick')) score += 15;
                 if (node.tagName === 'IMG') score += 10;
-                if (/layui-icon|icon/.test(String(node.className || ''))) score += 8;
+                if (/layui-icon|icon|Wdate/.test(String(node.className || ''))) score += 8;
                 return score;
               };
               const candidates = [];
-              if (cell) {
-                for (const node of cell.querySelectorAll('a, button, input[type="button"], img, [onclick], span, i, em, div')) {
+              const scopes = [cell, row].filter(Boolean);
+              for (const scope of scopes) {
+                for (const node of scope.querySelectorAll('a, button, input[type="button"], img, [onclick], span, i, em, div')) {
                   const score = scoreNode(node);
                   if (score > 0) candidates.push({node, score});
                 }
@@ -1471,21 +1525,107 @@ class PlaywrightFormBrowser:
             calendar = widget["widgets"][0]
         return widget, calendar
 
+    @staticmethod
+    def _parse_date_value(value: Any) -> tuple[date, str]:
+        """Return (date, display_format) where format is yyyy-MM or yyyy-MM-dd."""
+        raw = str(value).strip()
+        if re.fullmatch(r"\d{4}-\d{2}", raw):
+            return date.fromisoformat(f"{raw}-01"), "yyyy-MM"
+        if re.fullmatch(r"\d{4}/\d{2}", raw):
+            year, month = raw.split("/")
+            return date(int(year), int(month), 1), "yyyy-MM"
+        if re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", raw):
+            parsed = date.fromisoformat(raw)
+            return parsed, "yyyy-MM-dd"
+        if re.fullmatch(r"\d{4}/\d{1,2}/\d{1,2}", raw):
+            parts = [int(p) for p in raw.split("/")]
+            return date(parts[0], parts[1], parts[2]), "yyyy-MM-dd"
+        return date.fromisoformat(raw), "yyyy-MM-dd"
+
+    async def _set_date_value_js(self, field_id: str, display: str) -> dict[str, Any]:
+        """Write a date/month string into readonly WdatePicker/laydate fields."""
+        written = await self.page.evaluate(
+            """({id, value}) => {
+              const el = document.querySelector(`[data-formpilot-id="${id}"]`);
+              if (!el) return {ok: false, error: 'missing'};
+              const wasReadOnly = el.readOnly;
+              const wasDisabled = el.disabled;
+              try {
+                el.readOnly = false;
+                el.disabled = false;
+                el.value = value;
+                el.setAttribute('value', value);
+                el.dispatchEvent(new Event('input', {bubbles: true}));
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+                el.dispatchEvent(new Event('blur', {bubbles: true}));
+                if (typeof el.onchange === 'function') {
+                  try { el.onchange(); } catch (e) {}
+                }
+              } finally {
+                el.readOnly = wasReadOnly;
+                el.disabled = wasDisabled;
+              }
+              return {ok: true, value: el.value || ''};
+            }""",
+            {"id": field_id, "value": display},
+        )
+        if not written or not written.get("ok"):
+            return {"ok": False, "error": "无法写入日期值", "field_id": field_id}
+        await self.page.wait_for_timeout(120)
+        locator, _field = await self._field(field_id)
+        try:
+            actual = await locator.input_value()
+        except Exception:
+            actual = str(written.get("value") or "")
+        matches = bool(actual) and (
+            actual == display
+            or actual.startswith(display)
+            or display.startswith(actual)
+            or actual.replace("/", "-") == display
+        )
+        return {
+            "ok": matches,
+            "field_id": field_id,
+            "mode": "direct_value",
+            "has_value": bool(actual),
+            "display": display,
+        }
+
     async def set_date(self, field_id: str, value: Any) -> dict[str, Any]:
-        target = date.fromisoformat(str(value))
+        target, fmt = self._parse_date_value(value)
+        display = target.strftime("%Y-%m") if fmt == "yyyy-MM" else target.isoformat()
         locator, field = await self._field(field_id)
-        if field["type"] == "date" and not field["read_only"]:
+        monthish = bool(field.get("needs_month")) or bool(
+            re.search(r"入学年月|毕业年月|预计毕业|年月", str(field.get("label") or ""))
+        )
+        if monthish and fmt == "yyyy-MM-dd":
+            display = target.strftime("%Y-%m")
+            fmt = "yyyy-MM"
+        if field["type"] == "date" and not field["read_only"] and not field.get("disabled"):
             await locator.fill(target.isoformat())
             verified = await self.verify(field_id, target.isoformat())
             return {"ok": verified["matches"], "field_id": field_id, "mode": "native"}
 
+        # Prefer direct write for month-only readonly fields (WdatePicker often has no inspectable panel).
+        if monthish or field.get("read_only") or field.get("disabled"):
+            direct = await self._set_date_value_js(field_id, display)
+            if direct.get("ok"):
+                return direct
+
         opened = await self.open_field(field_id)
         if not opened["ok"]:
+            # Last chance: write value even if opener failed.
+            direct = await self._set_date_value_js(field_id, display)
+            if direct.get("ok"):
+                return direct
             return opened
         for _ in range(240):
             widget, calendar = await self._calendar_state()
             if calendar is None:
-                return {"ok": False, "error": "打开字段后未识别到日期面板"}
+                direct = await self._set_date_value_js(field_id, display)
+                if direct.get("ok"):
+                    return direct
+                return {"ok": False, "error": "打开字段后未识别到日期面板", "profile_hint": display}
 
             exact_dates = [
                 item for item in widget["options"]
@@ -1496,6 +1636,32 @@ class PlaywrightFormBrowser:
                 await self._click_widget_item(exact_dates[0]["option_id"])
                 actual = await locator.input_value()
                 return {"ok": bool(actual), "field_id": field_id, "mode": "calendar", "has_value": bool(actual)}
+
+            # Month-only panels: click year then month labels when present.
+            if fmt == "yyyy-MM":
+                month_labels = [
+                    item for item in widget["options"]
+                    if not item["disabled"]
+                    and (
+                        str(item.get("text") or "").strip() in {str(target.month), f"{target.month}月", f"{target.month:02d}"}
+                        or str(item.get("value") or "") in {str(target.month), f"{target.month:02d}"}
+                    )
+                ]
+                year_labels = [
+                    item for item in widget["options"]
+                    if not item["disabled"] and str(target.year) in " ".join(
+                        str(item.get(key, "")) for key in ("text", "value", "title", "aria_label")
+                    )
+                ]
+                current_year = calendar.get("current_year")
+                if current_year == target.year and len(month_labels) == 1:
+                    await self._click_widget_item(month_labels[0]["option_id"])
+                    actual = await locator.input_value()
+                    if actual:
+                        return {"ok": True, "field_id": field_id, "mode": "calendar_month", "has_value": True}
+                if current_year != target.year and len(year_labels) == 1:
+                    await self._click_widget_item(year_labels[0]["option_id"])
+                    continue
 
             current_year = calendar.get("current_year")
             current_month = calendar.get("current_month")
