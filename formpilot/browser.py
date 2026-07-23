@@ -1082,8 +1082,9 @@ class PlaywrightFormBrowser:
                 else if (nFull === wanted || n === wantedFull) score = 98;
                 else if (n.startsWith(wanted) && n.length <= wanted.length + 1) score = 90;
                 else if (wanted.startsWith(n) && wanted.length <= n.length + 1) score = 88;
-                // Tight contains: avoid 陕西 → 中共陕西省委党校.
-                else if (wanted.length >= 4 && n.includes(wanted) && (n.length - wanted.length) <= 2) score = 70;
+                else if (wanted.length >= 3 && (n.endsWith(wanted) || nFull.endsWith(wantedFull))) score = 82;
+                // Tight contains: avoid 陕西 → 中共陕西省委党校, but allow coded majors.
+                else if (wanted.length >= 4 && n.includes(wanted) && (n.length - wanted.length) <= 10) score = 72;
                 else if (n.length >= 4 && wanted.includes(n) && (wanted.length - n.length) <= 2) score = 65;
                 if (score < 0) continue;
                 if (el.matches('.province-item, .university-item, .city-item, .node_name, span.node_name, a[treenode], [treenode_a], li > a')) score += 25;
