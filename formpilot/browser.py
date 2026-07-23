@@ -125,9 +125,21 @@ SCAN_SCRIPT = r"""
   };
   const isPlaceholderValue = (v) => {
     const text = compact(v);
-    return !text || /^(请选择|点击选择|选择|请填写)/.test(text) || text === "-" || text === "--" || text === "—";
+    return !text || /^(请选择|点击选择|选择|请填写|\-+请选择\-+)/.test(text) || text === "-" || text === "--" || text === "—";
   };
-  const looksLikeRegionLabel = (label) => /出生地|籍贯|户口|所在地|省市|地区|归属地|生源地/.test(String(label || ""));
+  const isRegionDetailLabel = (label) => /详细|单位(?!地)|邮编|邮政|编码|电话|手机|邮箱|email/i.test(String(label || ""));
+  const looksLikeRegionLabel = (label) => {
+    const text = String(label || "");
+    if (isRegionDetailLabel(text)) return false;
+    return /出生地|籍贯|户口所在地|档案所在地|生源地|所在地区|省市县/.test(text);
+  };
+  const looksLikeRegionPicker = (el, label) => {
+    if (looksLikeRegionLabel(label)) return true;
+    const blob = `${el.id || ""} ${el.name || ""} ${el.className || ""} ${el.getAttribute("onclick") || ""}`;
+    if (/详细|address|dz|yzbm|postcode|zip/i.test(blob)) return false;
+    return /^(csd|csdm|jg|jgm|hkszd|daszd|sysd)(_|$)/i.test(`${el.id || ""}_${el.name || ""}`)
+      || /\b(csd|csdm|jgm|hkszd|daszd|sysd|area|region|cascade|picker|distpicker)\b/i.test(blob);
+  };
 
   const fields = Array.from(document.querySelectorAll("input, select, textarea, [contenteditable='true']"))
     .filter(visible).slice(0, 300).map(el => {
@@ -142,12 +154,14 @@ SCAN_SCRIPT = r"""
         has_value = selected.meaningful;
       }
       const readOnly = Boolean(el.readOnly);
-      const needsCascade = readOnly && (looksLikeRegionLabel(label) || isPlaceholderValue(el.getAttribute("placeholder")) || /area|region|city|cascade|picker/i.test(`${el.id} ${el.name} ${el.className || ""}`));
+      const disabled = Boolean(el.disabled);
+      // Tongji region widgets are often disabled/readonly text boxes; the real opener is nearby.
+      const needsCascade = looksLikeRegionPicker(el, label) && tag !== "select" && type !== "checkbox" && type !== "radio";
       return {
         field_id: idFor(el, "field"), tag, type, id: el.id || "", name: el.name || "",
         label, placeholder: el.getAttribute("placeholder") || "",
         required: isRequired(el),
-        disabled: Boolean(el.disabled), read_only: readOnly,
+        disabled, read_only: readOnly,
         needs_cascade: needsCascade,
         current_value,
         has_value,
@@ -579,6 +593,13 @@ class PlaywrightFormBrowser:
 
     async def fill(self, field_id: str, value: Any) -> dict[str, Any]:
         locator, field = await self._field(field_id)
+        if field.get("needs_cascade"):
+            return {
+                "ok": False,
+                "error": "该字段是地区级联选择器，请用 select_cascade_from_profile",
+                "field_id": field_id,
+                "needs_cascade": True,
+            }
         if field["disabled"] or field["read_only"]:
             return {"ok": False, "error": "字段不可编辑", "field": field}
         text_value = str(value)
@@ -588,7 +609,52 @@ class PlaywrightFormBrowser:
             if option is None:
                 return {"ok": False, "error": "当前下拉选项没有资料对应值", "available_options": [o["text"] for o in options]}
             await locator.select_option(value=option["value"])
+            # Native value may update while layui/custom UI still shows 请选择 — sync events/UI.
+            await locator.evaluate(
+                """(el, selectedText) => {
+                  el.dispatchEvent(new Event('input', {bubbles: true}));
+                  el.dispatchEvent(new Event('change', {bubbles: true}));
+                  try {
+                    if (window.layui && layui.form) layui.form.render('select');
+                  } catch (e) {}
+                  const wrap = el.closest('.layui-form-select') || el.parentElement;
+                  if (wrap) {
+                    const title = wrap.querySelector('.layui-select-title input, .layui-select-title, input.layui-input');
+                    if (title) {
+                      if ('value' in title) title.value = selectedText;
+                      else title.textContent = selectedText;
+                    }
+                  }
+                }""",
+                str(option.get("text") or text_value),
+            )
+            await self.page.wait_for_timeout(100)
             expected: Any = option["value"]
+            verified = await self.verify(field_id, expected)
+            if not verified["matches"]:
+                # Fallback: open the visible dropdown UI and click the option text.
+                clicked = await locator.evaluate(
+                    """(el, wantedText) => {
+                      const wrap = el.closest('.layui-form-select') || el.parentElement;
+                      const title = wrap && wrap.querySelector('.layui-select-title, .layui-select-title input, input.layui-input');
+                      if (title) title.click();
+                      else el.click();
+                      const nodes = Array.from(document.querySelectorAll('.layui-form-select dl dd, .layui-anim dd, option'));
+                      const target = nodes.find(node => {
+                        const text = String(node.innerText || node.textContent || '').replace(/\\s+/g, '').trim();
+                        const wanted = String(wantedText || '').replace(/\\s+/g, '').trim();
+                        return text === wanted || text.includes(wanted) || wanted.includes(text);
+                      });
+                      if (!target) return false;
+                      target.click();
+                      return true;
+                    }""",
+                    str(option.get("text") or text_value),
+                )
+                if clicked:
+                    await self.page.wait_for_timeout(120)
+                    verified = await self.verify(field_id, expected)
+            return {"ok": verified["matches"], "field_id": field_id, "verification": verified}
         elif field["type"] in {"checkbox", "radio"}:
             await locator.set_checked(bool(value))
             expected = bool(value)
@@ -600,45 +666,75 @@ class PlaywrightFormBrowser:
 
     async def open_field(self, field_id: str) -> dict[str, Any]:
         locator, field = await self._field(field_id)
-        # Readonly region pickers are intentionally clickable; only skip inert disabled
-        # fields that are not marked as cascade targets.
-        if field.get("disabled") and not (field.get("read_only") or field.get("needs_cascade")):
-            return {"ok": False, "error": "字段不可交互"}
-        clicked = False
-        try:
-            await locator.click(force=True, timeout=2000)
-            clicked = True
-        except Exception:
-            clicked = False
-        if not clicked:
-            # Some Tongji/layui pickers put the handler on the parent cell / sibling.
-            clicked = bool(
-                await self.page.evaluate(
-                    """(id) => {
-                      const el = document.querySelector(`[data-formpilot-id="${id}"]`);
-                      if (!el) return false;
-                      const candidates = [
-                        el,
-                        el.parentElement,
-                        el.closest("td"),
-                        el.nextElementSibling,
-                        el.previousElementSibling,
-                      ].filter(Boolean);
-                      for (const node of candidates) {
-                        try { node.click(); return true; } catch (e) {}
-                      }
-                      return false;
-                    }""",
-                    field_id,
-                )
-            )
-        if not clicked:
-            return {"ok": False, "error": "无法打开字段选择器"}
-        await self.page.wait_for_timeout(400)
+        regionish = bool(field.get("needs_cascade")) or bool(
+            re.search(r"出生地|籍贯|户口所在地|档案所在地|生源地|所在地区", str(field.get("label") or ""))
+        )
+        # Disabled/readonly region pickers are opened via nearby triggers, not typed into.
+        if field.get("disabled") and not regionish and not field.get("read_only"):
+            return {"ok": False, "error": "字段不可交互", "field_id": field_id}
+        clicked = await self.page.evaluate(
+            """(id) => {
+              const el = document.querySelector(`[data-formpilot-id="${id}"]`);
+              if (!el) return {ok: false, reason: 'missing'};
+              const cell = el.closest('td, th, .layui-form-item, .form-group, .el-form-item') || el.parentElement;
+              const scoreNode = (node) => {
+                if (!node || node === el) return -1;
+                const text = `${node.innerText || ''} ${node.value || ''} ${node.title || ''} ${node.className || ''} ${node.getAttribute('onclick') || ''} ${node.id || ''}`;
+                let score = 0;
+                if (/选择|请选择|选区|地区|省市/.test(text)) score += 50;
+                if (/area|region|city|csd|jg|dq|picker|cascade/i.test(text)) score += 30;
+                if (node.tagName === 'A' || node.tagName === 'BUTTON') score += 20;
+                if (node.getAttribute('onclick')) score += 15;
+                if (node.tagName === 'IMG') score += 10;
+                if (/layui-icon|icon/.test(String(node.className || ''))) score += 8;
+                return score;
+              };
+              const candidates = [];
+              if (cell) {
+                for (const node of cell.querySelectorAll('a, button, input[type="button"], img, [onclick], span, i, em, div')) {
+                  const score = scoreNode(node);
+                  if (score > 0) candidates.push({node, score});
+                }
+              }
+              candidates.sort((a, b) => b.score - a.score);
+              const tryClick = (node) => {
+                try {
+                  node.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                  node.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                  node.click();
+                  return true;
+                } catch (e) {
+                  return false;
+                }
+              };
+              for (const item of candidates) {
+                if (tryClick(item.node)) return {ok: true, via: 'trigger', score: item.score};
+              }
+              // Fall back to the field itself / parent cell even when disabled.
+              for (const node of [el, el.parentElement, cell]) {
+                if (node && tryClick(node)) return {ok: true, via: 'self'};
+              }
+              return {ok: false, reason: 'no-trigger'};
+            }""",
+            field_id,
+        )
+        if not clicked or not clicked.get("ok"):
+            # Last resort: Playwright force-click.
+            try:
+                await locator.click(force=True, timeout=2000)
+            except Exception:
+                return {
+                    "ok": False,
+                    "error": "无法打开字段选择器",
+                    "field_id": field_id,
+                    "detail": clicked,
+                }
+        await self.page.wait_for_timeout(450)
         widget = await self.inspect_widget()
         return {
             "ok": True,
             "field_id": field_id,
+            "open_via": (clicked or {}).get("via"),
             "widgets": widget["widgets"],
             "options": widget["options"][:200],
             "controls": widget["controls"][:100],
@@ -703,6 +799,18 @@ class PlaywrightFormBrowser:
         opened = await self.open_field(field_id)
         if not opened["ok"]:
             return opened
+        if not opened.get("options"):
+            await self.page.wait_for_timeout(500)
+            widget = await self.inspect_widget()
+            opened["options"] = widget["options"][:200]
+            opened["widgets"] = widget["widgets"]
+            if not opened["options"]:
+                return {
+                    "ok": False,
+                    "error": "已点击地区字段但未出现可选弹层，请 inspect_widget 或换触发方式",
+                    "field_id": field_id,
+                    "open_via": opened.get("open_via"),
+                }
         selected_count = 0
         for level, raw_value in enumerate(path):
             widget = await self.inspect_widget()
@@ -838,13 +946,53 @@ class PlaywrightFormBrowser:
         locator, field = await self._field(field_id)
         if field["type"] in {"checkbox", "radio"}:
             actual: Any = await locator.is_checked()
+            matches = expected is None or actual == expected
+        elif field.get("tag") == "select":
+            actual = await locator.input_value()
+            selected_text = await locator.evaluate(
+                """(el) => {
+                  const opt = el.selectedOptions && el.selectedOptions[0];
+                  return opt ? String(opt.text || '').trim() : '';
+                }"""
+            )
+            if expected is None:
+                matches = True
+            else:
+                wanted = str(expected)
+                matches = actual == wanted or selected_text == wanted
+                if not matches:
+                    # Match against option text when expected was a code/value.
+                    matches = bool(
+                        await locator.evaluate(
+                            """(el, wanted) => {
+                              const opt = Array.from(el.options || []).find(o => String(o.value) === String(wanted));
+                              const selected = el.selectedOptions && el.selectedOptions[0];
+                              if (!selected) return false;
+                              if (String(selected.value) === String(wanted)) return true;
+                              if (opt && selected.value === opt.value) return true;
+                              return false;
+                            }""",
+                            wanted,
+                        )
+                    )
+            # Placeholder still selected counts as failure when an expected value was provided.
+            if expected is not None and re.search(r"请选择|^-+$", selected_text or ""):
+                matches = False
+            return {
+                "ok": True,
+                "field_id": field_id,
+                "actual": actual,
+                "selected_text": selected_text,
+                "matches": matches,
+            }
         else:
             actual = await locator.input_value()
+            matches = expected is None or actual == expected
         return {
             "ok": True,
             "field_id": field_id,
             "actual": actual,
-            "matches": expected is None or actual == expected,
+            "matches": matches,
         }
 
     async def click(self, control_id: str) -> dict[str, Any]:

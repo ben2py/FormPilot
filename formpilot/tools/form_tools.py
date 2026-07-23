@@ -122,11 +122,18 @@ class FormPilotTools:
             sanitized["checked"] = bool(current)
         label = str(sanitized.get("label") or "")
         needs_cascade = bool(sanitized.get("needs_cascade"))
+        if re.search(r"出生地|籍贯|户口所在地|档案所在地|生源地|所在地区", label) and not re.search(
+            r"详细|单位(?!地)|邮编|邮政|编码", label
+        ):
+            needs_cascade = True
         if sanitized.get("read_only") and re.search(r"出生地|籍贯|户口|所在地|省市|地区|归属地", label):
             needs_cascade = True
         if needs_cascade:
             sanitized["needs_cascade"] = True
             sanitized["fill_hint"] = "select_cascade_from_profile（如 origin.province/city/district）"
+            # Disabled region display boxes still need to be filled via cascade.
+            if not sanitized.get("has_value"):
+                sanitized["disabled"] = False
         return sanitized
 
     @staticmethod
