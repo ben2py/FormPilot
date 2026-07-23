@@ -58,9 +58,14 @@ async def _default_confirm(message: str) -> bool:
 
 
 async def _default_pause(message: str) -> str:
-    if os.getenv("FORMPILOT_AUTO_APPROVE", "").strip() in {"1", "true", "yes", "y"}:
+    auto = os.getenv("FORMPILOT_AUTO_APPROVE", "").strip().lower() in {"1", "true", "yes", "y"}
+    # File upload / signature still need a human even in auto mode.
+    needs_human = bool(re.search(r"上传|照片|签名|文件|短信|验证码", str(message or "")))
+    if auto and not needs_human:
         print(f"\n{message}\n[AUTO] 跳过人工暂停，继续执行", flush=True)
         return ""
+    if auto and needs_human:
+        print(f"\n{message}\n[AUTO] 该项需要人工处理，仍将等待你在终端确认…", flush=True)
     reply = await asyncio.to_thread(
         input,
         f"\n{message}\n完成后按 Enter 继续；也可输入自然语言指引后回车：\n> ",
