@@ -59,6 +59,7 @@ class BrowserLike(Protocol):
 
 ConfirmHandler = Callable[[str], bool | Awaitable[bool]]
 PauseHandler = Callable[[str], Any | Awaitable[Any]]
+MissingHandler = Callable[[list[dict[str, Any]]], dict[str, str] | Awaitable[dict[str, str]]]
 
 
 async def _default_confirm(message: str) -> bool:
@@ -97,6 +98,7 @@ class FormPilotTools:
         policy: ApprovalPolicy | None = None,
         confirm: ConfirmHandler | None = None,
         pause: PauseHandler | None = None,
+        missing: MissingHandler | None = None,
         profile_path: str | Path | None = None,
         template_path: str | Path | None = None,
     ) -> None:
@@ -106,6 +108,7 @@ class FormPilotTools:
         self.policy = policy or ApprovalPolicy()
         self.confirm_handler = confirm or _default_confirm
         self.pause_handler = pause or _default_pause
+        self.missing_handler = missing
         if profile_path is not None:
             self.profile.path = Path(profile_path)
         if template_path is not None:
@@ -1121,14 +1124,11 @@ class FormPilotTools:
         return public
 
     async def request_missing_profile_fields(self, fields: list[dict[str, Any]]) -> dict[str, Any]:
-        """Ask the human in the terminal for missing profile values, then persist them."""
+        """Ask the human for missing profile values (UI or terminal), then persist them."""
         if not fields:
             return {"ok": False, "error": "fields 不能为空"}
 
-        print("\n========== 需要补充个人资料 ==========", flush=True)
-        print("以下必填/空缺项无法仅从现有资料可靠填写。请在终端逐项输入；直接回车表示跳过该项。", flush=True)
-        updates: dict[str, str] = {}
-        collected: list[dict[str, str]] = []
+        normalized: list[dict[str, Any]] = []
         for index, item in enumerate(fields, start=1):
             if not isinstance(item, dict):
                 continue
@@ -1136,25 +1136,50 @@ class FormPilotTools:
             path = str(item.get("profile_path") or item.get("path") or "").strip()
             hint = str(item.get("hint") or item.get("reason") or "").strip()
             if not path:
-                # Derive a stable custom path under extras if model forgot.
                 slug = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "_", label).strip("_") or f"field_{index}"
                 path = f"extras.{slug}"
-            prompt = f"[{index}/{len(fields)}] {label} ({path})"
-            if hint:
-                prompt += f"\n  说明：{hint}"
-            prompt += "\n  请输入值后回车（留空跳过）："
-            print(prompt, flush=True)
-            try:
-                value = input().strip()
-            except EOFError:
-                value = ""
-            if not value:
-                collected.append({"label": label, "profile_path": path, "status": "skipped"})
-                continue
-            updates[path] = value
-            collected.append({"label": label, "profile_path": path, "status": "saved"})
-            if path not in PROFILE_LABELS:
-                PROFILE_LABELS[path] = label
+            normalized.append({"label": label, "profile_path": path, "hint": hint})
+
+        updates: dict[str, str] = {}
+        collected: list[dict[str, str]] = []
+
+        if self.missing_handler is not None:
+            reply = await self._call_maybe_async(self.missing_handler, normalized)
+            values = reply if isinstance(reply, dict) else {}
+            for item in normalized:
+                path = item["profile_path"]
+                label = item["label"]
+                value = str(values.get(path) or values.get(label) or "").strip()
+                if not value:
+                    collected.append({"label": label, "profile_path": path, "status": "skipped"})
+                    continue
+                updates[path] = value
+                collected.append({"label": label, "profile_path": path, "status": "saved"})
+                if path not in PROFILE_LABELS:
+                    PROFILE_LABELS[path] = label
+        else:
+            print("\n========== 需要补充个人资料 ==========", flush=True)
+            print("以下必填/空缺项无法仅从现有资料可靠填写。请在终端逐项输入；直接回车表示跳过该项。", flush=True)
+            for index, item in enumerate(normalized, start=1):
+                label = item["label"]
+                path = item["profile_path"]
+                hint = item["hint"]
+                prompt = f"[{index}/{len(normalized)}] {label} ({path})"
+                if hint:
+                    prompt += f"\n  说明：{hint}"
+                prompt += "\n  请输入值后回车（留空跳过）："
+                print(prompt, flush=True)
+                try:
+                    value = input().strip()
+                except EOFError:
+                    value = ""
+                if not value:
+                    collected.append({"label": label, "profile_path": path, "status": "skipped"})
+                    continue
+                updates[path] = value
+                collected.append({"label": label, "profile_path": path, "status": "saved"})
+                if path not in PROFILE_LABELS:
+                    PROFILE_LABELS[path] = label
 
         changed = self.profile.update_many(updates)
         saved_profile = None
@@ -1179,7 +1204,8 @@ class FormPilotTools:
                     "updated_paths": changed,
                 }
 
-        print("====================================\n", flush=True)
+        if self.missing_handler is None:
+            print("====================================\n", flush=True)
         return {
             "ok": True,
             "updated_paths": changed,

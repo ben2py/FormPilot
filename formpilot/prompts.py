@@ -30,7 +30,7 @@ SYSTEM_PROMPT = """
      - 若返回 language_pending 非空，禁止点下一步，继续上传或 pause；
      - 也可 list_local_documents → suggest → upload_local_file；合并用 merge_pdfs + preview_pdf_text；
      - 不要把身份证当成成绩单；不要因为工具返回 has_value=false 就认定失败——若页面行已显示「已上传」即成功。
-   - 必填项无法从资料可靠推出 → 调用 request_missing_profile_fields（终端向用户补齐并写回 profile.json）。
+   - 必填项无法从资料可靠推出 → 调用 request_missing_profile_fields（控制台/终端向用户补齐并写回 profile.json）。
    - 补齐后再填写，确认 incomplete_required 为空，才允许点「下一步」。
 5. 禁止在仍有必填空项时点击「下一步」。若 click_control 返回 blocked，按 hint 处理，不要硬点。
 6. 若点击被无关弹层挡住再 dismiss_page_overlays；正在填选择器或刚点「下一步」后不要清掉提示层。若 click_control 返回 url_changed=false：
