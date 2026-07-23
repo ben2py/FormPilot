@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -131,7 +130,8 @@ class FormPilotAgent:
     async def run(self, goal: str) -> AgentResult:
         input_items: list[Any] = [{"role": "user", "content": goal}]
         history: list[dict[str, Any]] = []
-        repeated_calls: Counter[str] = Counter()
+        last_signature: str | None = None
+        consecutive_repeats = 0
         if self.run_logger is not None:
             self.run_logger.event("goal", goal=goal)
 
@@ -170,11 +170,15 @@ class FormPilotAgent:
 
             for call in turn.tool_calls:
                 signature = f"{call.name}:{json.dumps(call.arguments, ensure_ascii=False, sort_keys=True)}"
-                repeated_calls[signature] += 1
-                if repeated_calls[signature] > 3:
+                if signature == last_signature:
+                    consecutive_repeats += 1
+                else:
+                    last_signature = signature
+                    consecutive_repeats = 1
+                if consecutive_repeats > 3:
                     result: Any = {
                         "ok": False,
-                        "error": "同一个工具调用已重复三次，请改变策略或结束任务",
+                        "error": "同一个工具调用已连续重复三次，请改变策略或结束任务",
                     }
                 else:
                     self._log(f"[tool] {call.name} {json.dumps(call.arguments, ensure_ascii=False)}")

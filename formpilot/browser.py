@@ -1423,6 +1423,27 @@ class PlaywrightFormBrowser:
         level_soft = [item for item in soft if item.get("level") in {None, level}]
         return level_soft or soft
 
+    async def _wait_for_layui_iframe_ready(self, *, min_options: int = 5, timeout_ms: int = 4000) -> Any | None:
+        """Wait until the top layui iframe has clickable options (province/school list)."""
+        deadline = time.time() + max(0.5, timeout_ms / 1000)
+        last_frame = None
+        while time.time() < deadline:
+            frame = await self._top_layui_iframe()
+            if frame is not None:
+                last_frame = frame
+                try:
+                    count = await frame.evaluate(
+                        """() => document.querySelectorAll(
+                          '.province-item, .university-item, .city-item, .node_name, a[treenode], [role="treeitem"], a, li'
+                        ).length"""
+                    )
+                except Exception:
+                    count = 0
+                if int(count or 0) >= min_options:
+                    return frame
+            await self.page.wait_for_timeout(150)
+        return last_frame
+
     async def select_cascade(self, field_id: str, path: list[Any]) -> dict[str, Any]:
         if not path:
             return {"ok": False, "error": "级联路径为空"}
@@ -1430,8 +1451,8 @@ class PlaywrightFormBrowser:
         if not opened["ok"]:
             return opened
 
-        # Tongji area pickers render province/city/district inside a layui iframe.
-        frame = await self._top_layui_iframe()
+        # Tongji area/school pickers render inside a layui iframe — wait for options to hydrate.
+        frame = await self._wait_for_layui_iframe_ready()
         selected_labels: list[str] = []
         if frame is not None:
             for level, raw_value in enumerate(path):
@@ -1450,7 +1471,7 @@ class PlaywrightFormBrowser:
                 selected_labels.append(str(clicked.get("text") or raw_value))
                 await self.page.wait_for_timeout(350)
                 # Some pickers navigate iframe content; refresh frame handle each level.
-                nxt = await self._top_layui_iframe()
+                nxt = await self._wait_for_layui_iframe_ready(min_options=1, timeout_ms=2500)
                 if nxt is not None:
                     frame = nxt
             confirmed = await self._confirm_top_layui_layer()

@@ -397,6 +397,14 @@ class FormPilotTools:
                     continue
                 paths = [province_path, "education.school"]
                 break
+        elif paths == ["education.major"]:
+            for category_path in ("education.major_category", "education.degree_category"):
+                try:
+                    self.profile.get(category_path)
+                except KeyError:
+                    continue
+                paths = [category_path, "education.major"]
+                break
 
         try:
             values = [self.profile.get(path) for path in paths]

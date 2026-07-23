@@ -25,6 +25,7 @@ PROFILE_LABELS = {
     "education.school": "毕业/在读院校",
     "education.province": "院校所在省",
     "education.major": "所学专业",
+    "education.major_category": "专业门类",
     "education.degree": "学位",
     "education.graduation_date": "毕业日期",
     "education.enrollment_date": "入学日期",
