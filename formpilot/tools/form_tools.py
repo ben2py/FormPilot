@@ -182,6 +182,15 @@ class FormPilotTools:
         }
 
     async def inspect_page(self) -> dict[str, Any]:
+        if hasattr(self.browser, "maybe_recover_session_error"):
+            recovery = await self.browser.maybe_recover_session_error()
+            if recovery.get("hit"):
+                snapshot = await self.browser.inspect()
+                public = self._public_snapshot(snapshot)
+                public["session_recovery"] = recovery
+                if recovery.get("recovered"):
+                    public["message"] = recovery.get("message") or "已清理异常会话并重新打开登录页"
+                return public
         snapshot = await self.browser.inspect()
         return self._public_snapshot(snapshot)
 
@@ -493,6 +502,14 @@ class FormPilotTools:
 
     async def attempt_auto_login(self) -> dict[str, Any]:
         """Fill credentials + captcha, auto-click login, retry captcha on failure."""
+        if hasattr(self.browser, "maybe_recover_session_error"):
+            recovery = await self.browser.maybe_recover_session_error()
+            if recovery.get("hit") and not recovery.get("ok", True):
+                return {
+                    "ok": False,
+                    "error": recovery.get("error") or "会话异常页恢复失败",
+                    "session_recovery": recovery,
+                }
         snapshot = await self.browser.inspect()
         creds = load_login_credentials(page_url=snapshot.get("url"))
         if creds is None or not creds.configured:

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import os
 import re
+import shutil
 import time
 from datetime import date
 from pathlib import Path
@@ -11,6 +12,12 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .credentials import match_select_option
+
+
+SESSION_ERROR_PATTERN = re.compile(
+    r"程序开了小差|异常信息|关闭谷歌浏览器后重新打开|请尝试以下方法进行恢复",
+    re.I,
+)
 
 
 SCAN_SCRIPT = r"""
@@ -315,17 +322,39 @@ class PlaywrightFormBrowser:
         self._context: Any = None
         self.page: Any = None
         self.last_snapshot: dict[str, Any] | None = None
+        self.start_url: str | None = None
+        self._session_reset_done = False
 
-    async def start(self, url: str) -> None:
-        local_browsers = Path(".formpilot/browsers")
-        if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ and local_browsers.exists():
-            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(local_browsers.resolve())
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError as exc:
-            raise RuntimeError("缺少 Playwright，请运行: pip install -e . && playwright install chromium") from exc
+    @staticmethod
+    def recovery_login_url(url: str) -> str:
+        """Map Tongji /login/ error page back to a usable /logon entry."""
+        parts = urlsplit(str(url or "").strip())
+        if not parts.scheme or not parts.netloc:
+            return url
+        path = parts.path or "/"
+        if re.search(r"/login/?$", path, re.I):
+            path = re.sub(r"/login/?$", "/logon", path, flags=re.I)
+        elif re.search(r"/login/", path, re.I):
+            path = re.sub(r"/login/", "/logon", path, count=1, flags=re.I)
+        return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
-        self._playwright = await async_playwright().start()
+    async def detect_session_corruption(self) -> dict[str, Any]:
+        if self.page is None:
+            return {"hit": False}
+        info = await self.page.evaluate(
+            """() => {
+              const title = String(document.title || '');
+              const body = String((document.body && document.body.innerText) || '').slice(0, 2500);
+              const url = location.href;
+              const text = `${title}\\n${body}`;
+              const hit = /程序开了小差|异常信息|关闭谷歌浏览器后重新打开|请尝试以下方法进行恢复/.test(text)
+                || (/\\/login\\/?$/i.test(location.pathname) && /小差|异常|恢复/.test(text));
+              return {hit, title, url, snippet: text.replace(/\\s+/g, ' ').trim().slice(0, 180)};
+            }"""
+        )
+        return info or {"hit": False}
+
+    async def _launch_context(self) -> None:
         if self.cdp_url:
             self._browser = await self._playwright.chromium.connect_over_cdp(self.cdp_url)
             self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
@@ -337,15 +366,110 @@ class PlaywrightFormBrowser:
                 viewport={"width": 1440, "height": 960},
             )
         self.page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+
+    async def reset_corrupted_profile(self, *, reopen_url: str | None = None) -> dict[str, Any]:
+        """Delete persistent profile and reopen a clean login page."""
+        target = self.recovery_login_url(reopen_url or self.start_url or (self.page.url if self.page else ""))
+        if self.cdp_url:
+            if self.page is not None:
+                await self.page.goto(target, wait_until="domcontentloaded")
+            return {
+                "ok": True,
+                "recovered": True,
+                "mode": "cdp_navigate",
+                "url": target,
+                "message": "CDP 模式下无法删除本地 profile，已跳转到登录页",
+            }
+
+        if self._context is not None:
+            try:
+                await self._context.close()
+            except Exception:
+                pass
+            self._context = None
+            self.page = None
+
+        deleted = False
+        if self.profile_dir.exists():
+            shutil.rmtree(self.profile_dir, ignore_errors=True)
+            deleted = not self.profile_dir.exists()
+            print(f"[browser] 检测到同济会话异常页，已删除 {self.profile_dir}", flush=True)
+
+        await self._launch_context()
+        await self.page.goto(target, wait_until="domcontentloaded")
+        return {
+            "ok": True,
+            "recovered": True,
+            "mode": "profile_reset",
+            "deleted_profile": deleted,
+            "profile_dir": str(self.profile_dir),
+            "url": target,
+            "message": f"已删除浏览器配置目录并重新打开 {target}",
+        }
+
+    async def maybe_recover_session_error(self, *, reopen_url: str | None = None) -> dict[str, Any]:
+        info = await self.detect_session_corruption()
+        if not info.get("hit"):
+            return {"ok": True, "recovered": False, "hit": False}
+        if self._session_reset_done:
+            return {
+                "ok": False,
+                "recovered": False,
+                "hit": True,
+                "error": "仍停在会话异常页（已重置过一次 profile）",
+                "title": info.get("title"),
+                "url": info.get("url"),
+            }
+        self._session_reset_done = True
+        result = await self.reset_corrupted_profile(reopen_url=reopen_url)
+        result["hit"] = True
+        result["previous"] = {"title": info.get("title"), "url": info.get("url"), "snippet": info.get("snippet")}
+        # Confirm we left the error page.
+        again = await self.detect_session_corruption()
+        result["still_error"] = bool(again.get("hit"))
+        if again.get("hit"):
+            result["ok"] = False
+            result["error"] = "重置 profile 后仍看到异常页"
+        return result
+
+    async def start(self, url: str) -> None:
+        local_browsers = Path(".formpilot/browsers")
+        if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ and local_browsers.exists():
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(local_browsers.resolve())
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError as exc:
+            raise RuntimeError("缺少 Playwright，请运行: pip install -e . && playwright install chromium") from exc
+
+        self.start_url = url
+        self._session_reset_done = False
+        self._playwright = await async_playwright().start()
+        await self._launch_context()
         await self.page.goto(url, wait_until="domcontentloaded")
+        recovery = await self.maybe_recover_session_error(reopen_url=url)
+        if recovery.get("recovered"):
+            print(f"[browser] {recovery.get('message')}", flush=True)
 
     async def close(self) -> None:
-        if self._context and not self.cdp_url:
-            await self._context.close()
-        if self._browser and self.cdp_url:
-            await self._browser.close()
-        if self._playwright:
-            await self._playwright.stop()
+        try:
+            if self._context and not self.cdp_url:
+                await self._context.close()
+        except Exception:
+            pass
+        try:
+            if self._browser and self.cdp_url:
+                await self._browser.close()
+        except Exception:
+            pass
+        try:
+            if self._playwright:
+                await self._playwright.stop()
+        except Exception:
+            pass
+        self._context = None
+        self._browser = None
+        self._playwright = None
+        self.page = None
 
     async def inspect(self) -> dict[str, Any]:
         if self.page is None:
