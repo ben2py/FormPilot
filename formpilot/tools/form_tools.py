@@ -195,6 +195,9 @@ class FormPilotTools:
                 continue
             if field.get("has_value"):
                 continue
+            # After「确认上传」, many sites clear the file input but the photo is already stored.
+            if str(field.get("type") or "").lower() == "file":
+                continue
             item = {
                 "field_id": field.get("field_id"),
                 "label": field.get("label") or field.get("name") or field.get("id") or "未命名字段",
@@ -212,11 +215,6 @@ class FormPilotTools:
                 item["needs_month"] = True
                 item["fill_hint"] = field.get("fill_hint") or (
                     "set_date_from_profile（education.enrollment_date / education.graduation_date）"
-                )
-            if str(field.get("type") or "").lower() == "file":
-                item["fill_hint"] = (
-                    "upload_from_profile（证件照用 documents.photo；其他材料用对应路径），"
-                    "成功后若有「确认上传」再 click_control"
                 )
             incomplete.append(item)
         return incomplete
