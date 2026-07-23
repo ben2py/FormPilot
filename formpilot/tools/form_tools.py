@@ -180,11 +180,15 @@ class FormPilotTools:
         if str(sanitized.get("type") or "").lower() == "file":
             sanitized["fill_hint"] = (
                 "材料上传：先 suggest_documents_for_requirement(页面要求文案) → "
-                "自信则 upload_local_file / upload_from_profile；"
+                "自信则 upload_local_file / upload_from_profile（务必传 requirement=网页要求原文）；"
                 "多份合并用 merge_pdfs + preview_pdf_text 自检；不确定则 pause_for_user"
             )
+            if sanitized.get("page_hint"):
+                sanitized["page_hint"] = str(sanitized.get("page_hint"))[:280]
             if not sanitized.get("has_value"):
                 sanitized["disabled"] = False
+        else:
+            sanitized.pop("page_hint", None)
         return sanitized
 
     @staticmethod
@@ -475,11 +479,57 @@ class FormPilotTools:
         result["value_privacy"] = "已使用本地资料填写日期"
         return result
 
+    def _attach_upload_context(
+        self,
+        result: dict[str, Any],
+        *,
+        snapshot: dict[str, Any],
+        target: dict[str, Any] | None,
+        local_path: str,
+        profile_path: str | None = None,
+        requirement: str | None = None,
+    ) -> dict[str, Any]:
+        """Attach webpage + file metadata so RunLogger can persist an upload event."""
+        page_hint = ""
+        if target:
+            page_hint = str(target.get("page_hint") or "").strip()
+        if not page_hint:
+            # Fallback: short page text from snapshot if browser provided it.
+            page_hint = str(snapshot.get("page_text") or snapshot.get("hint") or "").strip()[:280]
+        field_label = str((target or {}).get("label") or "").strip() or "文件上传"
+        req = str(requirement or "").strip() or None
+        if not req and page_hint:
+            # Prefer a compact slice of nearby page text as the declared webpage requirement.
+            req = page_hint[:160]
+        result["page_url"] = snapshot.get("url")
+        result["page_title"] = snapshot.get("title")
+        result["field_label"] = field_label
+        result["field_name"] = (target or {}).get("name") or (target or {}).get("id")
+        result["field_accept"] = (target or {}).get("accept") or ""
+        result["page_hint"] = page_hint or None
+        result["local_path"] = str(local_path)
+        if profile_path:
+            result["profile_path"] = profile_path
+        if req:
+            result["requirement"] = req
+        result["upload_log"] = {
+            "file": result.get("file_name") or Path(local_path).name,
+            "local_path": str(local_path),
+            "profile_path": profile_path,
+            "page_label": field_label,
+            "requirement": req,
+            "page_url": snapshot.get("url"),
+            "page_title": snapshot.get("title"),
+            "ok": bool(result.get("ok")),
+        }
+        return result
+
     async def upload_from_profile(
         self,
         profile_path: str,
         field_id: str | None = None,
         approval_id: str | None = None,
+        requirement: str | None = None,
     ) -> dict[str, Any]:
         """Upload a local file referenced by profile path onto a file input."""
         snapshot = await self.browser.inspect()
@@ -503,9 +553,15 @@ class FormPilotTools:
         if not hasattr(self.browser, "upload_file"):
             return {"ok": False, "error": "当前浏览器不支持 upload_file"}
         result = await self.browser.upload_file(field_id, rel)
-        result["profile_path"] = profile_path
         result["value_privacy"] = "已使用本地文件路径上传；结果不回传文件内容"
-        return result
+        return self._attach_upload_context(
+            result,
+            snapshot=snapshot,
+            target=target,
+            local_path=rel,
+            profile_path=profile_path,
+            requirement=requirement,
+        )
 
     async def list_local_documents(self) -> dict[str, Any]:
         docs = list_local_documents()
@@ -534,6 +590,7 @@ class FormPilotTools:
         path: str,
         field_id: str | None = None,
         approval_id: str | None = None,
+        requirement: str | None = None,
     ) -> dict[str, Any]:
         """Upload an explicit local file path onto a file input."""
         snapshot = await self.browser.inspect()
@@ -553,10 +610,14 @@ class FormPilotTools:
         if not hasattr(self.browser, "upload_file"):
             return {"ok": False, "error": "当前浏览器不支持 upload_file"}
         result = await self.browser.upload_file(field_id, path)
-        result["local_path"] = str(path)
         result["value_privacy"] = "已使用本地文件路径上传；结果不回传文件内容"
-        return result
-
+        return self._attach_upload_context(
+            result,
+            snapshot=snapshot,
+            target=target,
+            local_path=str(path),
+            requirement=requirement,
+        )
     async def wait_and_rescan(self, milliseconds: int) -> dict[str, Any]:
         snapshot = await self.browser.wait_and_rescan(milliseconds)
         return self._public_snapshot(snapshot)
@@ -1171,15 +1232,19 @@ class FormPilotTools:
         ))
         registry.register(Tool(
             "upload_from_profile",
-            "把本地资料中的文件路径上传到页面的 file 输入框（证件照用 documents.photo）。可省略 field_id，自动选本页空的 file 框；上传后如有「确认上传」请再 click_control。",
+            "把本地资料中的文件路径上传到页面的 file 输入框（证件照用 documents.photo）。可省略 field_id；务必传 requirement=网页材料要求原文以便写入行动日志；上传后如有「确认上传」请再 click_control。",
             {
                 "type": "object",
                 "properties": {
                     "profile_path": {"type": "string", "description": "如 documents.photo"},
                     "field_id": {"type": ["string", "null"], "description": "可选；省略则自动选择本页 file 字段"},
                     "approval_id": nullable_approval,
+                    "requirement": {
+                        "type": ["string", "null"],
+                        "description": "网页上的材料要求原文，如「证件照」「本科成绩单」；会写入 upload 日志",
+                    },
                 },
-                "required": ["profile_path", "field_id", "approval_id"],
+                "required": ["profile_path", "field_id", "approval_id", "requirement"],
                 "additionalProperties": False,
             },
             self.upload_from_profile,
@@ -1245,15 +1310,19 @@ class FormPilotTools:
         ))
         registry.register(Tool(
             "upload_local_file",
-            "把明确的本地文件路径上传到页面 file 输入框（来自 suggest/merge 返回的 path）。可省略 field_id；上传后若有「确认上传」再 click_control。",
+            "把明确的本地文件路径上传到页面 file 输入框（来自 suggest/merge 返回的 path）。务必传 requirement=网页要求原文（写入行动日志）；可省略 field_id；上传后若有「确认上传」再 click_control。",
             {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "如 personal_info/PDF/本科成绩单.pdf"},
                     "field_id": {"type": ["string", "null"]},
                     "approval_id": nullable_approval,
+                    "requirement": {
+                        "type": ["string", "null"],
+                        "description": "网页材料要求原文；会写入 upload 日志",
+                    },
                 },
-                "required": ["path", "field_id", "approval_id"],
+                "required": ["path", "field_id", "approval_id", "requirement"],
                 "additionalProperties": False,
             },
             self.upload_local_file,

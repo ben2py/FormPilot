@@ -23,11 +23,11 @@ SYSTEM_PROMPT = """
      2) 失败则：open_field（会点同格/同行「选择」）→ inspect_widget → click_visible_text（where=iframe；点省名时不要用会误匹配院校的模糊词）→ confirm_overlay；
      3) 不要点「清除/关闭」，未选完前不要 dismiss_page_overlays；不要对「选择」做整页 ambiguous 盲点。
    - 年月字段（needs_month / 入学年月 / 预计毕业年月）：用 set_date_from_profile（education.enrollment_date / education.graduation_date，支持 yyyy-MM），不要 fill_text。
-   - 照片：documents.photo 用 upload_from_profile；成功后若有「确认上传」再 click_control。
+   - 照片：documents.photo 用 upload_from_profile，并传 requirement=网页照片要求原文；成功后若有「确认上传」再 click_control。
    - 上传材料页（多个材料名/说明 + file）：必须严格按网页要求匹配本地文件，禁止随便上传无关文件：
      1) list_local_documents 了解库存；
      2) 对每一条网页要求调用 suggest_documents_for_requirement(要求原文)；
-     3) confident=true 且候选明确 → upload_local_file（或对应 documents.* 的 upload_from_profile）；
+     3) confident=true 且候选明确 → upload_local_file / upload_from_profile，**requirement 必须填网页要求原文**（写入行动日志：本地文件↔网页信息）；
      4) 若网页要求一份材料，但本地是多份相关证明才覆盖 → merge_pdfs（按合理顺序）→ preview_pdf_text 核对文本是否覆盖要求 → 再 upload_local_file；
      5) 无匹配、多候选难分、文本核验不过、或扫描件无法确认 → pause_for_user，清楚说明缺什么/不确定什么，请人类提供或指定文件；
      6) 不要把身份证当成成绩单等错配；文件名与内容一般对应，以网页文案为准。

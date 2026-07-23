@@ -232,6 +232,14 @@ SCAN_SCRIPT = r"""
         isRequired(el) || /照片|头像|证件照|上传|材料|附件|简历|扫描件/.test(label)
         || /照片|证件照|上传照片/.test(compact(document.body && document.body.innerText, 400))
       );
+      let page_hint = "";
+      if (type === "file") {
+        const block = el.closest(".layui-form-item, .form-group, .upload, .photo, .material, form, section, .content, #content") || el.parentElement;
+        page_hint = compact((block && block.innerText) || "", 280);
+        if (!page_hint || page_hint.length < 8) {
+          page_hint = compact(document.body && document.body.innerText, 280);
+        }
+      }
       return {
         field_id: idFor(el, "field"), tag, type, id: el.id || "", name: el.name || "",
         label: label || (type === "file" ? "文件上传" : label),
@@ -243,6 +251,7 @@ SCAN_SCRIPT = r"""
         needs_month: needsMonth,
         current_value,
         has_value,
+        page_hint: page_hint || null,
         option_value: type === "radio" || type === "checkbox" ? String(el.value || "") : null,
         options: tag === "select" ? Array.from(el.options).slice(0, 200).map(o => ({text: compact(o.text), value: o.value, selected: o.selected, disabled: o.disabled})) : null
       };
