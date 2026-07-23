@@ -1002,7 +1002,10 @@ class PlaywrightFormBrowser:
         if field.get("needs_cascade"):
             return {
                 "ok": False,
-                "error": "该字段是地区级联选择器，请用 select_cascade_from_profile",
+                "error": (
+                    "该字段是地区级联选择器：请用 select_cascade_from_profile，"
+                    "或 open_field → inspect_widget → click_visible_text → confirm_overlay"
+                ),
                 "field_id": field_id,
                 "needs_cascade": True,
             }
@@ -1080,7 +1083,16 @@ class PlaywrightFormBrowser:
             return {"ok": False, "error": "字段不可交互", "field_id": field_id}
         if regionish:
             # Avoid stacking multiple area iframes from previous failed attempts.
-            await self.close_layui_layers()
+            closer = getattr(self, "close_layui_layers", None)
+            if callable(closer):
+                await closer()
+            else:
+                # Defensive fallback if method is missing on a stale object.
+                await self.page.evaluate(
+                    """() => {
+                      document.querySelectorAll('.layui-layer, .layui-layer-shade').forEach(n => n.remove());
+                    }"""
+                )
             await self.page.wait_for_timeout(120)
         clicked = await self.page.evaluate(
             """(id) => {
