@@ -386,12 +386,43 @@ class FormPilotTools:
         field = next((item for item in snapshot["fields"] if item["field_id"] == field_id), None)
         if field is None:
             return {"ok": False, "error": "字段已消失，请重新 inspect_page"}
+
+        paths = list(profile_paths)
+        # Tongji school picker is province → university. Expand a lone school path.
+        if paths == ["education.school"]:
+            for province_path in ("education.province", "archive.province"):
+                try:
+                    self.profile.get(province_path)
+                except KeyError:
+                    continue
+                paths = [province_path, "education.school"]
+                break
+
         try:
-            values = [self.profile.get(path) for path in profile_paths]
+            values = [self.profile.get(path) for path in paths]
         except KeyError as exc:
             return {"ok": False, "error": str(exc)}
         result = await self.browser.select_cascade(field_id, values)
-        result["profile_paths"] = profile_paths
+        # Fallback: school-only keyword search if province→school failed.
+        if (
+            not result.get("ok")
+            and paths != list(profile_paths)
+            and list(profile_paths) == ["education.school"]
+        ):
+            try:
+                school_only = [self.profile.get("education.school")]
+            except KeyError as exc:
+                return {"ok": False, "error": str(exc), "prior": result}
+            retry = await self.browser.select_cascade(field_id, school_only)
+            retry["profile_paths"] = profile_paths
+            retry["tried_paths"] = paths
+            retry["fallback"] = "school_only"
+            retry.pop("actual", None)
+            retry["value_privacy"] = "已使用本地资料逐级填写"
+            if retry.get("ok"):
+                return retry
+            result["fallback_result"] = {k: retry.get(k) for k in ("ok", "error", "wanted", "available_options") if k in retry}
+        result["profile_paths"] = paths
         result.pop("actual", None)
         result["value_privacy"] = "已使用本地资料逐级填写"
         return result

@@ -23,6 +23,7 @@ PROFILE_LABELS = {
     "contact.address": "通信地址",
     "contact.postal_code": "邮政编码",
     "education.school": "毕业/在读院校",
+    "education.province": "院校所在省",
     "education.major": "所学专业",
     "education.degree": "学位",
     "education.graduation_date": "毕业日期",

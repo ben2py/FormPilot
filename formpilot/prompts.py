@@ -19,8 +19,8 @@ SYSTEM_PROMPT = """
    - 有直接对应资料路径 → fill_from_profile。
    - 资料里没有同名字段，但能从已有信息合理推出 → fill_text。
    - 自定义弹层选择（needs_cascade：地区/学校/专业等；open 后常有 iframe）：
-     1) 优先 select_cascade_from_profile（学校/专业可只传 ["education.school"] 或 ["education.major"]；会自动搜索树并点叶子，再确定）；
-     2) 失败则：open_field（会点同格/同行「选择」）→ inspect_widget → click_visible_text（where=iframe）→ confirm_overlay；
+     1) 优先 select_cascade_from_profile（学校会自动按 education.province→education.school；专业用 ["education.major"]；地区用省市区路径）；
+     2) 失败则：open_field（会点同格/同行「选择」）→ inspect_widget → click_visible_text（where=iframe；点省名时不要用会误匹配院校的模糊词）→ confirm_overlay；
      3) 不要点「清除/关闭」，未选完前不要 dismiss_page_overlays；不要对「选择」做整页 ambiguous 盲点。
    - 年月字段（needs_month / 入学年月 / 预计毕业年月）：用 set_date_from_profile（education.enrollment_date / education.graduation_date，支持 yyyy-MM），不要 fill_text。
    - 必填项无法从资料可靠推出 → 调用 request_missing_profile_fields（终端向用户补齐并写回 profile.json）。

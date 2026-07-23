@@ -863,7 +863,10 @@ class PlaywrightFormBrowser:
                     const n = norm(raw);
                     let score = -1;
                     if (n === wanted) score = 100;
-                    else if (n.includes(wanted) || wanted.includes(n)) score = 70 - Math.abs(n.length - wanted.length);
+                    else if (n.startsWith(wanted) && n.length <= wanted.length + 1) score = 90;
+                    else if (wanted.startsWith(n) && wanted.length <= n.length + 1) score = 88;
+                    else if (wanted.length >= 4 && n.includes(wanted) && (n.length - wanted.length) <= 2) score = 70;
+                    else if (n.length >= 4 && wanted.includes(n) && (wanted.length - n.length) <= 2) score = 65;
                     if (score >= 0) scored.push({el, text: raw, score});
                   }
                   scored.sort((a, b) => b.score - a.score || a.text.length - b.text.length);
@@ -1025,18 +1028,27 @@ class PlaywrightFormBrowser:
         )
 
     async def _click_text_in_frame(self, frame: Any, raw_value: Any) -> dict[str, Any]:
-        # Prefer filtering the tree via search box to avoid duplicate wrapper nodes.
-        try:
-            searched = await self._search_in_frame(frame, str(raw_value))
-        except Exception:
-            searched = {"ok": False}
-        if searched.get("ok"):
-            await self.page.wait_for_timeout(450)
+        wanted_raw = str(raw_value or "").strip()
+        # Province/city parent filters must NOT go through the keyword box — searching
+        # "陕西省" collapses the tree to schools whose names contain 陕西 and then
+        # fuzzy-matches the wrong leaf (e.g. 中共陕西省委党校).
+        use_search = not bool(
+            re.search(r"(省|市|区|县|自治州|地区|盟|旗|特别行政区)$", wanted_raw)
+        ) and len(wanted_raw) >= 3
+        if use_search:
+            try:
+                searched = await self._search_in_frame(frame, wanted_raw)
+            except Exception:
+                searched = {"ok": False}
+            if searched.get("ok"):
+                await self.page.wait_for_timeout(450)
 
         return await frame.evaluate(
             """(wantedRaw) => {
-              const norm = (s) => String(s || '').replace(/[\\s_\\-—:：省市区县]/g, '').toLowerCase();
-              const wanted = norm(wantedRaw);
+              const norm = (s) => String(s || '').replace(/[\\s_\\-—:：]/g, '').toLowerCase();
+              const stripAdmin = (s) => String(s || '').replace(/(特别行政区|自治区|省|市|区|县|自治州|地区|盟|旗)$/g, '');
+              const wantedFull = norm(wantedRaw);
+              const wanted = norm(stripAdmin(wantedRaw)) || wantedFull;
               if (!wanted) return {ok: false, error: 'empty'};
               const visible = (el) => {
                 const s = getComputedStyle(el);
@@ -1047,30 +1059,34 @@ class PlaywrightFormBrowser:
                 while (n && n !== document.body) { d += 1; n = n.parentElement; }
                 return d;
               };
-              const preferredSel = ".node_name, a[treenode], [treenode_a], span.node_name, li > a, [role='treeitem'], [role='option']";
+              const preferredSel = ".node_name, a[treenode], [treenode_a], span.node_name, li > a, [role='treeitem'], [role='option'], .province-item, .university-item, .city-item";
               const broadSel = preferredSel + ", a, span, td, button, [onclick]";
               const nodes = Array.from(document.querySelectorAll(broadSel)).filter(visible);
               const scored = [];
               for (const el of nodes) {
-                // Own text only for leaves: avoid li that concatenates children labels.
                 let text = '';
-                if (el.matches('.node_name, span.node_name')) {
+                if (el.matches('.node_name, span.node_name, .province-item, .university-item, .city-item')) {
                   text = String(el.textContent || '').replace(/\\s+/g, ' ').trim();
                 } else {
                   const clone = el.cloneNode(true);
                   clone.querySelectorAll('ul, ol, .switch, .button, input, button').forEach(x => x.remove());
                   text = String(clone.innerText || clone.textContent || '').replace(/\\s+/g, ' ').trim();
                 }
-                if (!text || text.length > 24) continue;
+                if (!text || text.length > 40) continue;
                 if (/^(确定|清除|关闭|取消|确认|提交|请选择|关键字|搜索)$/.test(text)) continue;
-                const n = norm(text);
+                const nFull = norm(text);
+                const n = norm(stripAdmin(text)) || nFull;
                 if (!n) continue;
                 let score = -1;
-                if (n === wanted) score = 100;
-                else if (n.includes(wanted) || wanted.includes(n)) score = 70 - Math.abs(n.length - wanted.length);
+                if (nFull === wantedFull || n === wanted) score = 100;
+                else if (nFull === wanted || n === wantedFull) score = 98;
+                else if (n.startsWith(wanted) && n.length <= wanted.length + 1) score = 90;
+                else if (wanted.startsWith(n) && wanted.length <= n.length + 1) score = 88;
+                // Tight contains: avoid 陕西 → 中共陕西省委党校.
+                else if (wanted.length >= 4 && n.includes(wanted) && (n.length - wanted.length) <= 2) score = 70;
+                else if (n.length >= 4 && wanted.includes(n) && (wanted.length - n.length) <= 2) score = 65;
                 if (score < 0) continue;
-                // Prefer true tree leaves / anchors over wrappers.
-                if (el.matches('.node_name, span.node_name, a[treenode], [treenode_a], li > a')) score += 25;
+                if (el.matches('.province-item, .university-item, .city-item, .node_name, span.node_name, a[treenode], [treenode_a], li > a')) score += 25;
                 if (el.tagName === 'A') score += 8;
                 const childCandidates = el.querySelectorAll('.node_name, a, [role="treeitem"]').length;
                 if (childCandidates > 1) score -= 40;
@@ -1095,18 +1111,22 @@ class PlaywrightFormBrowser:
                   ok: false,
                   error: 'not_found',
                   available: nodes.map(n => String(n.innerText || n.textContent || '').replace(/\\s+/g,' ').trim())
-                    .filter(t => t && t.length <= 24 && !/^(确定|清除|关闭|取消|关键字|搜索)$/.test(t))
+                    .filter(t => t && t.length <= 40 && !/^(确定|清除|关闭|取消|关键字|搜索)$/.test(t))
                     .slice(0, 80),
                 };
               }
               const bestScore = scored[0].score;
               let finalists = scored.filter(item => item.score === bestScore);
-              // Same label duplicated on wrapper+leaf: pick the deepest leaf.
               if (finalists.length > 1) {
                 const same = finalists.every(item => norm(item.text) === norm(finalists[0].text));
                 if (same) {
                   finalists = [finalists.sort((a, b) => a.childCount - b.childCount || b.depth - a.depth || a.area - b.area)[0]];
                 }
+              }
+              // Prefer shortest exact-ish label when still tied (省 vs 含省名的院校).
+              if (finalists.length > 1) {
+                const shortest = Math.min(...finalists.map(i => i.text.length));
+                finalists = finalists.filter(i => i.text.length === shortest);
               }
               if (finalists.length !== 1) {
                 return {
@@ -1117,12 +1137,11 @@ class PlaywrightFormBrowser:
                 };
               }
               const target = finalists[0].el;
-              // Click the anchor/node_name if present inside.
               const clickable = target.closest('a') || target.querySelector('a, .node_name') || target;
               clickable.click();
               return {ok: true, text: finalists[0].text, via: 'leaf'};
             }""",
-            str(raw_value),
+            wanted_raw,
         )
 
     async def _confirm_top_layui_layer(self) -> bool:
