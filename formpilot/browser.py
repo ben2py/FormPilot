@@ -1308,7 +1308,7 @@ class PlaywrightFormBrowser:
                     "field_id": field_id,
                     "detail": clicked,
                 }
-        await self.page.wait_for_timeout(550 if regionish else 400)
+        await self.page.wait_for_timeout(550 if pickerish else 400)
         widget = await self.inspect_widget()
         return {
             "ok": True,
