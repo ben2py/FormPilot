@@ -36,7 +36,11 @@ SYSTEM_PROMPT = """
    - 必填项无法从资料可靠推出 → 调用 request_missing_profile_fields（终端向用户补齐并写回 profile.json）。
    - 补齐后再填写，确认 incomplete_required 为空，才允许点「下一步」。
 5. 禁止在仍有必填空项时点击「下一步」。若 click_control 返回 blocked，按 hint 处理，不要硬点。
-6. 若点击被无关弹层挡住再 dismiss_page_overlays；正在填选择器或刚点「下一步」后不要清掉提示层。若 click_control 返回 url_changed=false，先读 page_messages/dialogs 并 inspect_page 修字段，不要连点下一步或盲目 dismiss。
+6. 若点击被无关弹层挡住再 dismiss_page_overlays；正在填选择器或刚点「下一步」后不要清掉提示层。若 click_control 返回 url_changed=false：
+   - 先读 page_messages/dialogs（常见「保存失败！」）；
+   - **禁止立刻 dismiss_page_overlays**（会清掉唯一错误信息）；
+   - 学习信息页优先核查：所学专业是否真正选中（select_cascade/confirm）、入学/毕业年月是否为 yyyy-MM、排名名次只填数字（如 3）不要填 3/94、绩点按页面示例格式；
+   - 修好后再点下一步，不要空转改 GPA 格式。
 7. 原生下拉（tag=select）用 fill_from_profile / fill_text / fill_from_task_fact，不要用 click_widget_option。
 8. 首页/导航页按任务说明自主进入最匹配入口。
 9. 有依赖的字段先填上游再 wait_and_rescan / inspect_page。

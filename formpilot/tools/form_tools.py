@@ -875,10 +875,49 @@ class FormPilotTools:
                 "target": target,
                 "summary": f"在 {snapshot['url']} 点击“{control['label']}”",
             }
-        return await self.browser.click(control_id)
+        result = await self.browser.click(control_id)
+        messages = list(result.get("page_messages") or []) + list(result.get("dialogs") or [])
+        joined = " ".join(str(m) for m in messages)
+        if NEXT_STEP_PATTERN.search(label) and not result.get("url_changed") and re.search(
+            r"保存失败|校验|不能为空|请选择|格式", joined
+        ):
+            result["ok"] = False
+            result["blocked"] = True
+            result["error"] = joined[:200] or "保存失败，页面未前进"
+            result["hint"] = (
+                "服务器保存失败：不要 dismiss_page_overlays。"
+                "先 search_visible_text/inspect_page 找具体缺项；"
+                "学习信息常见原因：专业未真正选中、年月非 yyyy-MM、"
+                "排名名次不要写成 3/94（名次与总人数分两栏）、绩点格式不符。"
+            )
+        return result
 
     async def dismiss_page_overlays(self) -> dict[str, Any]:
         """Close common modal/shade layers that block clicks (e.g. layui)."""
+        # Refuse to wipe the only clue after a failed save.
+        if hasattr(self.browser, "page") and self.browser.page is not None:
+            try:
+                visible = await self.browser.page.evaluate(
+                    """() => Array.from(document.querySelectorAll(
+                      '.layui-layer-msg, .layui-layer-dialog .layui-layer-content, [role=\"alert\"]'
+                    )).map(n => String(n.innerText||n.textContent||'').replace(/\\s+/g,' ').trim())
+                      .filter(Boolean).slice(0, 8)"""
+                )
+            except Exception:
+                visible = []
+            joined = " ".join(str(m) for m in (visible or []))
+            if re.search(r"保存失败|校验失败|不能为空", joined):
+                return {
+                    "ok": False,
+                    "blocked": True,
+                    "dismissed": 0,
+                    "closed_messages": list(visible or [])[:8],
+                    "error": "当前弹层含保存/校验失败提示，禁止关闭",
+                    "hint": (
+                        "请先根据 closed_messages 修字段（专业级联、yyyy-MM 年月、排名分栏等），"
+                        "再点下一步；不要清空错误提示。"
+                    ),
+                }
         if hasattr(self.browser, "dismiss_page_overlays"):
             result = await self.browser.dismiss_page_overlays()  # type: ignore[misc]
         elif hasattr(self.browser, "page") and self.browser.page is not None:
