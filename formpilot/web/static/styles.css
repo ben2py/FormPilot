@@ -176,7 +176,7 @@ body {
 }
 .field { display: grid; gap: 0.35rem; }
 .field span { font-size: 0.78rem; color: var(--muted); }
-.field input, .field textarea, .task-editor {
+.field input, .field textarea, .field select, .task-editor {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -187,10 +187,35 @@ body {
   outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.field input:focus, .field textarea:focus, .task-editor:focus {
+.field input:focus, .field textarea:focus, .field select:focus, .task-editor:focus {
   border-color: rgba(201, 100, 66, 0.45);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+.api-section { margin-bottom: 1rem; }
+.api-grid { gap: 1rem; }
+.api-block h3 {
+  margin: 0 0 0.25rem;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+}
+.api-block .hint {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+.api-block .hint code {
+  font-size: 0.78rem;
+  background: rgba(28, 25, 23, 0.06);
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+}
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem;
+}
+.api-toolbar { margin: 0.2rem 0 0; }
 .task-editor { min-height: 140px; resize: vertical; line-height: 1.45; }
 .check { display: flex; gap: 0.45rem; align-items: center; color: var(--muted); font-size: 0.9rem; }
 
@@ -269,4 +294,5 @@ body {
 @media (max-width: 980px) {
   .layout { grid-template-columns: 1fr; }
   .console { height: 42vh; }
+  .field-row { grid-template-columns: 1fr; }
 }

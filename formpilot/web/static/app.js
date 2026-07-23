@@ -168,6 +168,34 @@ async function api(path, options = {}) {
   return data;
 }
 
+function applySettingsForm(settings) {
+  $("cfgApiKey").value = settings.openai_api_key || "";
+  $("cfgBaseUrl").value = settings.openai_base_url || "";
+  $("cfgModel").value = settings.model || "";
+  $("cfgApiMode").value = settings.api_mode || "auto";
+  $("cfgReasoning").value = settings.reasoning_effort || "medium";
+  $("cfgVisionKey").value = settings.vision_api_key || "";
+  $("cfgVisionBase").value = settings.vision_base_url || "";
+  $("cfgVisionModel").value = settings.vision_model || "";
+  $("modelPill").textContent = settings.model || "model";
+  const visionPill = settings.vision_model ? ` · ${settings.vision_model}` : "";
+  $("modelPill").title = `决策: ${settings.model || "-"}${visionPill}`;
+  setStatus(settings.has_api_key ? "Idle" : "Missing API key", settings.has_api_key ? "" : "error");
+}
+
+function collectSettingsBody() {
+  return {
+    openai_api_key: $("cfgApiKey").value.trim(),
+    openai_base_url: $("cfgBaseUrl").value.trim(),
+    model: $("cfgModel").value.trim(),
+    api_mode: $("cfgApiMode").value,
+    reasoning_effort: $("cfgReasoning").value,
+    vision_api_key: $("cfgVisionKey").value.trim(),
+    vision_base_url: $("cfgVisionBase").value.trim(),
+    vision_model: $("cfgVisionModel").value.trim(),
+  };
+}
+
 async function loadAll() {
   const [profile, task, settings] = await Promise.all([
     api("/api/profile"),
@@ -176,8 +204,7 @@ async function loadAll() {
   ]);
   renderProfileEditor(profile.profile);
   $("taskEditor").value = task.content || "";
-  $("modelPill").textContent = settings.model || "model";
-  setStatus(settings.has_api_key ? "Idle" : "Missing API key", settings.has_api_key ? "" : "error");
+  applySettingsForm(settings);
 }
 
 function setStatus(text, cls = "") {
@@ -298,6 +325,28 @@ function connectEvents() {
     }
   };
 }
+
+$("saveSettings").addEventListener("click", async () => {
+  try {
+    const settings = await api("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify(collectSettingsBody()),
+    });
+    applySettingsForm(settings);
+    toast(settings.has_api_key ? "API 配置已保存到 .env" : "已保存，但仍缺少 OPENAI_API_KEY");
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$("reloadSettings").addEventListener("click", async () => {
+  try {
+    applySettingsForm(await api("/api/settings"));
+    toast("API 配置已重新加载");
+  } catch (err) {
+    toast(err.message);
+  }
+});
 
 $("saveProfile").addEventListener("click", async () => {
   try {

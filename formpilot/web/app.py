@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from ..agent import FormPilotAgent
 from ..browser import PlaywrightFormBrowser
 from ..cli import DEFAULT_GOAL, compose_goal
-from ..config import AgentConfig, load_env_file
+from ..config import AgentConfig, load_env_file, upsert_env_file
 from ..logging_util import RunLogger
 from ..model import create_model
 from ..profile import ProfileStore
@@ -53,6 +53,53 @@ class RunRequest(BaseModel):
 
 class InteractResponse(BaseModel):
     answer: Any = None
+
+
+SETTINGS_KEYS = (
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "FORMPILOT_MODEL",
+    "FORMPILOT_API_MODE",
+    "FORMPILOT_REASONING_EFFORT",
+    "FORMPILOT_VISION_MODEL",
+    "FORMPILOT_VISION_BASE_URL",
+    "FORMPILOT_VISION_API_KEY",
+)
+
+
+class SettingsUpdate(BaseModel):
+    openai_api_key: str | None = None
+    openai_base_url: str | None = None
+    model: str | None = None
+    api_mode: str | None = None
+    reasoning_effort: str | None = None
+    vision_model: str | None = None
+    vision_base_url: str | None = None
+    vision_api_key: str | None = None
+
+
+def _settings_payload() -> dict[str, Any]:
+    config = AgentConfig.from_env()
+    vision_key = os.getenv("FORMPILOT_VISION_API_KEY") or os.getenv("DASHSCOPE_API_KEY") or ""
+    return {
+        "ok": True,
+        "env_path": str(ENV_PATH),
+        "model": config.model,
+        "api_mode": config.api_mode,
+        "reasoning_effort": config.reasoning_effort,
+        "max_steps": config.max_steps,
+        "openai_base_url": os.getenv("OPENAI_BASE_URL", ""),
+        "openai_api_key": os.getenv("OPENAI_API_KEY", ""),
+        "has_api_key": bool(os.getenv("OPENAI_API_KEY")),
+        "vision_model": os.getenv("FORMPILOT_VISION_MODEL", ""),
+        "vision_base_url": os.getenv("FORMPILOT_VISION_BASE_URL", ""),
+        "vision_api_key": vision_key,
+        "has_vision_api_key": bool(vision_key),
+        "fast": os.getenv("FORMPILOT_FAST", ""),
+        "auto_approve": os.getenv("FORMPILOT_AUTO_APPROVE", ""),
+        "profile_path": str(PROFILE_PATH),
+        "task_path": str(TASK_PATH),
+    }
 
 
 def _ensure_workspace() -> None:
@@ -111,18 +158,35 @@ async def put_task(body: TaskUpdate) -> dict[str, Any]:
 @app.get("/api/settings")
 async def get_settings() -> dict[str, Any]:
     _ensure_workspace()
-    config = AgentConfig.from_env()
-    return {
-        "ok": True,
-        "model": config.model,
-        "reasoning_effort": config.reasoning_effort,
-        "max_steps": config.max_steps,
-        "fast": os.getenv("FORMPILOT_FAST", ""),
-        "auto_approve": os.getenv("FORMPILOT_AUTO_APPROVE", ""),
-        "has_api_key": bool(os.getenv("OPENAI_API_KEY")),
-        "profile_path": str(PROFILE_PATH),
-        "task_path": str(TASK_PATH),
+    return _settings_payload()
+
+
+@app.put("/api/settings")
+async def put_settings(body: SettingsUpdate) -> dict[str, Any]:
+    if _run_lock.locked() or (_run_task and not _run_task.done()):
+        raise HTTPException(409, "任务运行中，请先停止再改 API 配置")
+
+    mapping = {
+        "OPENAI_API_KEY": body.openai_api_key,
+        "OPENAI_BASE_URL": body.openai_base_url,
+        "FORMPILOT_MODEL": body.model,
+        "FORMPILOT_API_MODE": body.api_mode,
+        "FORMPILOT_REASONING_EFFORT": body.reasoning_effort,
+        "FORMPILOT_VISION_MODEL": body.vision_model,
+        "FORMPILOT_VISION_BASE_URL": body.vision_base_url,
+        "FORMPILOT_VISION_API_KEY": body.vision_api_key,
     }
+    updates = {key: value.strip() if isinstance(value, str) else "" for key, value in mapping.items() if value is not None}
+    if not updates:
+        raise HTTPException(400, "没有可保存的配置项")
+
+    unknown = [key for key in updates if key not in SETTINGS_KEYS]
+    if unknown:
+        raise HTTPException(400, f"不支持的配置项: {', '.join(unknown)}")
+
+    upsert_env_file(ENV_PATH, updates, apply=True)
+    load_env_file(ENV_PATH, override=True)
+    return _settings_payload()
 
 
 @app.get("/api/run/status")

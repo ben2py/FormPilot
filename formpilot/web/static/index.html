@@ -54,6 +54,66 @@
         <p>打开目标报名页后，交互确认会以弹窗出现在此控制台。</p>
       </div>
 
+      <details class="section api-section" open>
+        <summary>模型 API</summary>
+        <div class="section-body api-grid">
+          <div class="api-block">
+            <h3>普通 API（决策模型）</h3>
+            <p class="hint">写入本地 <code>.env</code>，用于 Agent 工具决策。</p>
+            <label class="field">
+              <span>API Key · OPENAI_API_KEY</span>
+              <input id="cfgApiKey" type="password" autocomplete="off" placeholder="sk-..." />
+            </label>
+            <label class="field">
+              <span>Base URL · OPENAI_BASE_URL</span>
+              <input id="cfgBaseUrl" type="url" placeholder="https://api.openai.com/v1 或 https://api.deepseek.com" />
+            </label>
+            <label class="field">
+              <span>模型 · FORMPILOT_MODEL</span>
+              <input id="cfgModel" type="text" placeholder="gpt-5.6-terra / deepseek-v4-flash" />
+            </label>
+            <div class="field-row">
+              <label class="field">
+                <span>API 模式 · FORMPILOT_API_MODE</span>
+                <select id="cfgApiMode">
+                  <option value="auto">auto</option>
+                  <option value="responses">responses</option>
+                  <option value="chat">chat</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>推理强度 · FORMPILOT_REASONING_EFFORT</span>
+                <select id="cfgReasoning">
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="api-block">
+            <h3>视觉 API（验证码）</h3>
+            <p class="hint">独立于决策模型；DeepSeek 文本接口不能传图，请用通义 VL 等。</p>
+            <label class="field">
+              <span>Vision Key · FORMPILOT_VISION_API_KEY</span>
+              <input id="cfgVisionKey" type="password" autocomplete="off" placeholder="sk-..." />
+            </label>
+            <label class="field">
+              <span>Vision Base URL · FORMPILOT_VISION_BASE_URL</span>
+              <input id="cfgVisionBase" type="url" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+            </label>
+            <label class="field">
+              <span>Vision 模型 · FORMPILOT_VISION_MODEL</span>
+              <input id="cfgVisionModel" type="text" placeholder="qwen3-vl-plus" />
+            </label>
+          </div>
+          <div class="toolbar api-toolbar">
+            <button type="button" class="btn ghost" id="reloadSettings">重新加载</button>
+            <button type="button" class="btn primary" id="saveSettings">保存 API 配置</button>
+          </div>
+        </div>
+      </details>
+
       <label class="field">
         <span>目标 URL</span>
         <input id="runUrl" type="url" placeholder="https://yzbm.tongji.edu.cn/..." />
