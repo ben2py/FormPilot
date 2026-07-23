@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .credentials import match_select_option
+from .timing import scaled_ms
 
 
 SESSION_ERROR_PATTERN = re.compile(
@@ -876,8 +877,15 @@ class PlaywrightFormBrowser:
             "png": png,
         }
 
+    async def _pause(self, milliseconds: int, *, minimum: int = 20) -> None:
+        delay = scaled_ms(milliseconds, minimum=minimum)
+        if self.page is not None:
+            await self.page.wait_for_timeout(delay)
+        else:
+            await asyncio.sleep(delay / 1000)
+
     async def wait_and_rescan(self, milliseconds: int = 800) -> dict[str, Any]:
-        await asyncio.sleep(max(0, min(milliseconds, 5000)) / 1000)
+        await asyncio.sleep(scaled_ms(milliseconds, minimum=0) / 1000)
         return await self.inspect()
 
     async def close_layui_layers(self) -> int:
@@ -971,7 +979,7 @@ class PlaywrightFormBrowser:
                 tried.append("iframe")
                 result = await self._click_text_in_frame(frame, wanted)
                 if result.get("ok"):
-                    await self.page.wait_for_timeout(200)
+                    await self._pause(200)
                     return {"ok": True, "text": result.get("text"), "where": "iframe", "matched": result.get("text")}
                 if scope == "iframe":
                     return {
@@ -987,7 +995,7 @@ class PlaywrightFormBrowser:
             tried.append("page")
             result = await click_in_page()
             if result.get("ok"):
-                await self.page.wait_for_timeout(200)
+                await self._pause(200)
                 return result
             if scope == "page":
                 return {"ok": False, "error": result.get("error") or "页面中未找到", "where": "page", "candidates": result.get("candidates")}
@@ -1002,7 +1010,7 @@ class PlaywrightFormBrowser:
     async def confirm_overlay(self) -> dict[str, Any]:
         """Click the primary confirm button on the topmost overlay/dialog."""
         confirmed = await self._confirm_top_layui_layer()
-        await self.page.wait_for_timeout(250)
+        await self._pause(250)
         return {
             "ok": bool(confirmed),
             "confirmed": bool(confirmed),
@@ -1030,7 +1038,7 @@ class PlaywrightFormBrowser:
                     continue
             if frames:
                 return frames[-1]
-            await self.page.wait_for_timeout(120)
+            await self._pause(120)
         return None
 
     async def inspect_widget(self) -> dict[str, Any]:
@@ -1121,7 +1129,7 @@ class PlaywrightFormBrowser:
             except Exception:
                 searched = {"ok": False}
             if searched.get("ok"):
-                await self.page.wait_for_timeout(450)
+                await self._pause(450)
 
         return await frame.evaluate(
             """(wantedRaw) => {
@@ -1307,7 +1315,7 @@ class PlaywrightFormBrowser:
                 }""",
                 str(option.get("text") or text_value),
             )
-            await self.page.wait_for_timeout(100)
+            await self._pause(100)
             expected: Any = option["value"]
             verified = await self.verify(field_id, expected)
             if not verified["matches"]:
@@ -1331,7 +1339,7 @@ class PlaywrightFormBrowser:
                     str(option.get("text") or text_value),
                 )
                 if clicked:
-                    await self.page.wait_for_timeout(120)
+                    await self._pause(120)
                     verified = await self.verify(field_id, expected)
             return {"ok": verified["matches"], "field_id": field_id, "verification": verified}
         elif field["type"] in {"checkbox", "radio"}:
@@ -1369,7 +1377,7 @@ class PlaywrightFormBrowser:
                       document.querySelectorAll('.layui-layer, .layui-layer-shade').forEach(n => n.remove());
                     }"""
                 )
-            await self.page.wait_for_timeout(120)
+            await self._pause(120)
         clicked = await self.page.evaluate(
             """(id) => {
               const el = document.querySelector(`[data-formpilot-id="${id}"]`);
@@ -1431,7 +1439,7 @@ class PlaywrightFormBrowser:
                     "field_id": field_id,
                     "detail": clicked,
                 }
-        await self.page.wait_for_timeout(550 if pickerish else 400)
+        await self._pause(550 if pickerish else 400)
         widget = await self.inspect_widget()
         return {
             "ok": True,
@@ -1447,14 +1455,14 @@ class PlaywrightFormBrowser:
         locator = self.page.locator(f'[data-formpilot-id="{item_id}"]')
         if await locator.count() == 1:
             await locator.click(force=True)
-            await self.page.wait_for_timeout(250)
+            await self._pause(250)
             return
         frame = await self._top_layui_iframe()
         if frame is not None:
             frame_locator = frame.locator(f'[data-formpilot-id="{item_id}"]')
             if await frame_locator.count() == 1:
                 await frame_locator.click(force=True)
-                await self.page.wait_for_timeout(250)
+                await self._pause(250)
                 return
         raise RuntimeError(f"Widget item is missing or ambiguous: {item_id}")
 
@@ -1522,7 +1530,7 @@ class PlaywrightFormBrowser:
                     count = 0
                 if int(count or 0) >= min_options:
                     return frame
-            await self.page.wait_for_timeout(150)
+            await self._pause(150)
         return last_frame
 
     async def select_cascade(self, field_id: str, path: list[Any]) -> dict[str, Any]:
@@ -1550,13 +1558,13 @@ class PlaywrightFormBrowser:
                         "field_id": field_id,
                     }
                 selected_labels.append(str(clicked.get("text") or raw_value))
-                await self.page.wait_for_timeout(350)
+                await self._pause(350)
                 # Some pickers navigate iframe content; refresh frame handle each level.
                 nxt = await self._wait_for_layui_iframe_ready(min_options=1, timeout_ms=2500)
                 if nxt is not None:
                     frame = nxt
             confirmed = await self._confirm_top_layui_layer()
-            await self.page.wait_for_timeout(350)
+            await self._pause(350)
             snapshot = await self.inspect()
             field = next((item for item in snapshot["fields"] if item["field_id"] == field_id), None)
             has_value = bool(field and field.get("has_value"))
@@ -1627,7 +1635,7 @@ class PlaywrightFormBrowser:
                     }
             await self._click_widget_item(candidates[0]["option_id"])
             selected_count += 1
-            await self.page.wait_for_timeout(200)
+            await self._pause(200)
         await self._confirm_top_layui_layer()
         snapshot = await self.inspect()
         field = next((item for item in snapshot["fields"] if item["field_id"] == field_id), None)
@@ -1715,7 +1723,7 @@ class PlaywrightFormBrowser:
         )
         if not written or not written.get("ok"):
             return {"ok": False, "error": "无法写入日期值", "field_id": field_id}
-        await self.page.wait_for_timeout(120)
+        await self._pause(120)
         locator, _field = await self._field(field_id)
         try:
             actual = await locator.input_value()
@@ -1912,7 +1920,7 @@ class PlaywrightFormBrowser:
         uploaded_status = False
         page_messages: list[str] = []
         for _ in range(15):
-            await self.page.wait_for_timeout(200)
+            await self._pause(200)
             status = await self.page.evaluate(
                 """(fid) => {
                   const el = document.querySelector(`[data-formpilot-id="${fid}"]`);
@@ -2039,7 +2047,7 @@ class PlaywrightFormBrowser:
         await locator.click(timeout=15000)
         # Allow validation toast / SPA navigation to settle.
         for _ in range(8):
-            await self.page.wait_for_timeout(200)
+            await self._pause(200)
             if self.page.url != old_url:
                 break
         page_messages = await self.page.evaluate(

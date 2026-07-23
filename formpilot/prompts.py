@@ -46,6 +46,7 @@ SYSTEM_PROMPT = """
 12. 完成可安全处理后，简洁报告已填写、已跳过（及跳过原因）及是否尚未提交。
 13. 已确认本页 incomplete_required 为空后，应优先点「下一步」前进，不要无故返回上一页或侧栏反复横跳。
 14. 若任务说明要求「覆盖重填」或资料刚更新：即使字段已有值/侧栏已打勾，也要用最新 profile 覆盖关键字段（家庭成员/外语/计算机/经历/学术成果/奖励等），verify 后再下一步。
+15. 速度：同一轮尽量并行/连续调用多个 fill_*（不要每填一项就 inspect）；优先 fill_family_from_profile / upload_materials_from_profile / select_cascade_from_profile 等整页捷径；不要对每个字段 verify_field；仅在保存失败或不确定时再 inspect。
 
 禁止调用不存在的工具。不得要求执行任意 JavaScript。不得自动最终提交。
 """.strip()
