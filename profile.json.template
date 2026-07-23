@@ -35,7 +35,10 @@
   "archive": {
     "unit": "示例大学",
     "address": "上海市示例路 123 号",
-    "postal_code": "200000"
+    "postal_code": "200000",
+    "province": "陕西省",
+    "city": "西安市",
+    "district": "未央区"
   },
   "application": {
     "project": "推免生预报名",
@@ -43,5 +46,10 @@
     "batch": "2026年秋季批次",
     "mode": "普通招考",
     "program": "计算机科学与技术"
+  },
+  "birthplace": {
+    "province": "浙江省",
+    "city": "温州市",
+    "district": "瑞安市"
   }
 }
