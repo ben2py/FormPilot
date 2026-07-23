@@ -832,6 +832,26 @@ class PlaywrightFormBrowser:
         )
         return int(result or 0)
 
+    async def dismiss_page_overlays(self) -> dict[str, Any]:
+        if self.page is None:
+            return {"ok": True, "dismissed": 0, "messages": []}
+        info = await self.page.evaluate(
+            """() => {
+              const layers = Array.from(document.querySelectorAll('.layui-layer'));
+              const messages = layers.map(n => String(n.innerText || '').replace(/\\s+/g,' ').trim())
+                .filter(t => t && t.length <= 240)
+                .slice(0, 8);
+              const nodes = Array.from(document.querySelectorAll('.layui-layer, .layui-layer-shade'));
+              for (const node of nodes) node.remove();
+              return {dismissed: nodes.length, messages};
+            }"""
+        )
+        return {
+            "ok": True,
+            "dismissed": int((info or {}).get("dismissed") or 0),
+            "messages": list((info or {}).get("messages") or []),
+        }
+
     async def click_visible_text(self, text: str, *, where: str = "auto") -> dict[str, Any]:
         """Click a visible option/label by text. Model-driven primitive for custom pickers."""
         wanted = str(text or "").strip()
@@ -1824,6 +1844,50 @@ class PlaywrightFormBrowser:
         if await locator.count() != 1:
             raise RuntimeError(f"Control locator is not unique: {control_id}")
         old_url = self.page.url
-        await locator.click()
-        await self.page.wait_for_timeout(250)
-        return {"ok": True, "label": control["label"], "old_url": old_url, "new_url": self.page.url}
+        dialogs: list[str] = []
+
+        def _on_dialog(dialog: Any) -> None:
+            try:
+                dialogs.append(str(dialog.message or ""))
+                dialog.accept()
+            except Exception:
+                try:
+                    dialog.dismiss()
+                except Exception:
+                    pass
+
+        self.page.once("dialog", _on_dialog)
+        await locator.click(timeout=15000)
+        # Allow validation toast / SPA navigation to settle.
+        for _ in range(8):
+            await self.page.wait_for_timeout(200)
+            if self.page.url != old_url:
+                break
+        page_messages = await self.page.evaluate(
+            """() => {
+              const nodes = Array.from(document.querySelectorAll(
+                '.layui-layer-msg, .layui-layer-dialog .layui-layer-content, .layui-layer-content, [role=\"alert\"], .error, .invalid-feedback'
+              ));
+              return nodes.map(n => String(n.innerText || n.textContent || '').replace(/\\s+/g,' ').trim())
+                .filter(t => t && t.length <= 200)
+                .slice(0, 8);
+            }"""
+        )
+        new_url = self.page.url
+        result: dict[str, Any] = {
+            "ok": True,
+            "label": control["label"],
+            "old_url": old_url,
+            "new_url": new_url,
+            "url_changed": new_url != old_url,
+        }
+        if dialogs:
+            result["dialogs"] = [m for m in dialogs if m][:5]
+        if page_messages:
+            result["page_messages"] = page_messages
+        if new_url == old_url and re.search(r"下一步|继续|保存", str(control.get("label") or "")):
+            result["hint"] = (
+                "点击后 URL 未变：可能校验未通过或弹层提示。先看 page_messages/dialogs，"
+                "再 inspect_page；不要立刻 dismiss_page_overlays（会清掉提示）。"
+            )
+        return result

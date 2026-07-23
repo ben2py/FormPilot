@@ -494,26 +494,20 @@ class FormPilotTools:
 
     async def dismiss_page_overlays(self) -> dict[str, Any]:
         """Close common modal/shade layers that block clicks (e.g. layui)."""
-        if not hasattr(self.browser, "page") or self.browser.page is None:
-            # Fake browsers in tests may not have page.
-            if hasattr(self.browser, "dismiss_page_overlays"):
-                return await self.browser.dismiss_page_overlays()  # type: ignore[misc]
-            return {"ok": True, "dismissed": 0}
-        result = await self.browser.page.evaluate(
-            """() => {
-              let dismissed = 0;
-              const shades = Array.from(document.querySelectorAll('.layui-layer-shade, .layui-layer'));
-              for (const node of shades) {
-                node.remove();
-                dismissed += 1;
-              }
-              return {dismissed};
-            }"""
-        )
+        if hasattr(self.browser, "dismiss_page_overlays"):
+            result = await self.browser.dismiss_page_overlays()  # type: ignore[misc]
+        elif hasattr(self.browser, "page") and self.browser.page is not None:
+            result = await self.browser.close_layui_layers()
+            result = {"ok": True, "dismissed": int(result or 0), "messages": []}
+        else:
+            return {"ok": True, "dismissed": 0, "messages": []}
         await self.browser.wait_and_rescan(400)
         public = self._public_snapshot(await self.browser.inspect())
         public["dismissed"] = int((result or {}).get("dismissed") or 0)
+        public["closed_messages"] = list((result or {}).get("messages") or [])[:8]
         public["message"] = f"已尝试关闭弹层 {public['dismissed']} 个"
+        if public["closed_messages"]:
+            public["message"] += "；关闭前可见文案已放入 closed_messages"
         return public
 
     async def request_missing_profile_fields(self, fields: list[dict[str, Any]]) -> dict[str, Any]:
