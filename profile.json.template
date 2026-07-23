@@ -20,22 +20,25 @@
   },
   "education": {
     "school": "示例大学",
+    "province": "陕西省",
     "major": "计算机科学与技术",
+    "major_category": "工学",
     "degree": "工学学士",
     "enrollment_date": "2022-09",
     "graduation_date": "2026-06-30",
-    "department": "信息工程学院人工智能系",
+    "department": "信息工程学院",
     "gpa": "4.1/5",
     "score_percent": "82.00",
     "rank_position": "3",
-    "rank_total": "94"
+    "rank_total": "94",
+    "student_id": "2022000000"
   },
   "origin": {
     "province": "浙江省",
     "city": "温州市",
     "district": "瑞安市",
     "hukou_location": "浙江省温州市瑞安市",
-    "hukou_detail_address": "浙江省温州市瑞安市安阳街道万松东路283弄11幢1单元501室"
+    "hukou_detail_address": "示例地址"
   },
   "archive": {
     "unit": "示例大学",
@@ -50,7 +53,8 @@
     "type": "专硕",
     "batch": "2026年秋季批次",
     "mode": "普通招考",
-    "program": "计算机科学与技术"
+    "program": "计算机科学与技术",
+    "preference": "有专硕项目优先选专硕；具体院系/专业由模型按页面选项与任务说明判定"
   },
   "birthplace": {
     "province": "浙江省",
@@ -59,11 +63,64 @@
   },
   "family": {
     "member1": {
-      "name": "母亲",
+      "name": "示例亲属",
       "relation": "母亲",
-      "work_unit": "瑞安市体育发展中心",
-      "phone": "18805871535"
+      "work_unit": "示例单位",
+      "phone": "13800138000"
     }
+  },
+  "language": {
+    "name": "英语",
+    "cet4": "500",
+    "cet6": "500",
+    "ielts": "6.5",
+    "level": "大学英语六级",
+    "score": "500",
+    "summary": "CET4 500；CET6 500；IELTS 6.5"
+  },
+  "computer": {
+    "level": "无",
+    "certificate": "无",
+    "proof": "无",
+    "skills": "Python"
+  },
+  "experience": {
+    "item1": {
+      "start": "2018-09",
+      "end": "2021-06",
+      "unit": "示例高中",
+      "role": "学生",
+      "description": "高中阶段学习"
+    },
+    "item2": {
+      "start": "2022-09",
+      "end": "至今",
+      "unit": "示例大学",
+      "role": "本科生",
+      "description": "本科学习"
+    }
+  },
+  "publications": {
+    "item1": {
+      "date": "2025-01",
+      "venue": "示例会议",
+      "title": "示例论文标题",
+      "author_rank": "1"
+    }
+  },
+  "awards": {
+    "item1": {
+      "date": "2025-12",
+      "place": "示例大学",
+      "name": "示例奖项",
+      "level": "校级"
+    }
+  },
+  "extras": {
+    "has_punishment": "无",
+    "has_paper": "有",
+    "research": "示例方向",
+    "recommender_note": "待补充"
   },
   "documents": {
     "photo": "personal_info/photo_150x200.jpg"
