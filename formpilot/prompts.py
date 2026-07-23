@@ -17,7 +17,7 @@ SYSTEM_PROMPT = """
    - 页面标签旁有 * / ＊ /「必填」的，一律按必填处理（与 incomplete_required 一致）。
    - 有直接对应资料路径 → fill_from_profile。
    - 资料里没有同名字段，但能从已有信息合理推出 → fill_text。
-   - 出生地 / 籍贯 / 户口所在地 / 档案所在地等（needs_cascade=true，哪怕 disabled）→ 必须用 select_cascade_from_profile（常用 origin.province、origin.city、origin.district）；不要 fill_text，也不要因「字段不可交互」放弃。
+   - 出生地 / 籍贯 / 户口所在地 / 档案所在地等（needs_cascade=true，哪怕 disabled）→ 必须用 select_cascade_from_profile（常用 origin.province、origin.city、origin.district）；不要 fill_text，也不要因「字段不可交互」放弃。同济地区选择在 layui iframe 内，工具会自动进入 iframe 点选后再点确定。
    - 必填项无法从资料可靠推出 → 调用 request_missing_profile_fields（终端向用户补齐并写回 profile.json）。
    - 补齐后再 fill_from_profile / fill_text / select_cascade_from_profile，确认 incomplete_required 为空，才允许点「下一步」。
 5. 禁止在仍有必填空项时点击「下一步」。若 click_control 返回 blocked，按 hint 处理，不要硬点。

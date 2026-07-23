@@ -250,6 +250,8 @@ WIDGET_SCAN_SCRIPT = r"""
     .filter(el => {
       const text = compact(el.innerText || el.textContent, 80);
       if (!text || text.length > 40) return false;
+      // Parent-layer chrome for Tongji area iframe dialogs — not real region options.
+      if (/^(确定|清除|关闭|取消|确认|提交)$/.test(text)) return false;
       // Prefer leaf-ish nodes: skip containers that nest many other option candidates.
       const nested = el.querySelectorAll(optionSelector).length;
       return nested <= 2;
@@ -308,6 +310,47 @@ WIDGET_SCAN_SCRIPT = r"""
   });
   document.documentElement.dataset.formpilotSequence = String(sequence);
   return {widgets, options, controls};
+}
+"""
+
+IFRAME_OPTION_SCAN_SCRIPT = r"""
+() => {
+  let sequence = Number(document.documentElement.dataset.formpilotSequence || "0");
+  const compact = (v, n = 120) => String(v || "").replace(/\s+/g, " ").trim().slice(0, n);
+  const visible = (el) => {
+    const s = getComputedStyle(el);
+    return s.display !== "none" && s.visibility !== "hidden" && s.opacity !== "0" && el.getClientRects().length > 0;
+  };
+  const idFor = (el, prefix) => {
+    if (!el.dataset.formpilotId) {
+      sequence += 1;
+      el.dataset.formpilotId = `${prefix}-${sequence}`;
+    }
+    return el.dataset.formpilotId;
+  };
+  const optionSelector = "a, li, td, span, div, label, button, [onclick], [role='option'], [role='treeitem']";
+  const nodes = Array.from(document.querySelectorAll(optionSelector)).filter(visible);
+  const options = [];
+  for (const el of nodes) {
+    const text = compact(el.innerText || el.textContent, 80);
+    if (!text || text.length > 24) continue;
+    if (/^(确定|清除|关闭|取消|确认|提交|请选择)$/.test(text)) continue;
+    const nested = el.querySelectorAll(optionSelector).length;
+    if (nested > 2) continue;
+    const className = typeof el.className === "string" ? el.className : "";
+    options.push({
+      option_id: idFor(el, "iframe-option"),
+      text,
+      value: el.getAttribute("data-value") || el.getAttribute("value") || "",
+      title: el.getAttribute("title") || "",
+      class_name: compact(className, 120),
+      source: "iframe",
+      disabled: el.getAttribute("aria-disabled") === "true" || /disabled/.test(className),
+    });
+    if (options.length >= 400) break;
+  }
+  document.documentElement.dataset.formpilotSequence = String(sequence);
+  return {options, url: location.href, title: document.title};
 }
 """
 
@@ -700,10 +743,155 @@ class PlaywrightFormBrowser:
         await asyncio.sleep(max(0, min(milliseconds, 5000)) / 1000)
         return await self.inspect()
 
+    async def close_layui_layers(self) -> int:
+        if self.page is None:
+            return 0
+        result = await self.page.evaluate(
+            """() => {
+              const nodes = Array.from(document.querySelectorAll('.layui-layer, .layui-layer-shade'));
+              for (const node of nodes) node.remove();
+              return nodes.length;
+            }"""
+        )
+        return int(result or 0)
+
+    async def _top_layui_iframe(self) -> Any | None:
+        """Return the content frame of the topmost visible layui area-picker iframe."""
+        if self.page is None:
+            return None
+        for _ in range(25):
+            handles = await self.page.query_selector_all(
+                ".layui-layer.layui-layer-iframe iframe, .layui-layer-iframe iframe, .layui-layer iframe"
+            )
+            frames: list[Any] = []
+            for handle in handles:
+                try:
+                    box = await handle.bounding_box()
+                    if not box or box.get("width", 0) < 20 or box.get("height", 0) < 20:
+                        continue
+                    frame = await handle.content_frame()
+                    if frame is not None:
+                        frames.append(frame)
+                except Exception:
+                    continue
+            if frames:
+                return frames[-1]
+            await self.page.wait_for_timeout(120)
+        return None
+
     async def inspect_widget(self) -> dict[str, Any]:
         if self.page is None:
             raise RuntimeError("Browser is not started")
-        return await self.page.evaluate(WIDGET_SCAN_SCRIPT)
+        widget = await self.page.evaluate(WIDGET_SCAN_SCRIPT)
+        options = list(widget.get("options") or [])
+        controls = list(widget.get("controls") or [])
+        widgets = list(widget.get("widgets") or [])
+        frame = await self._top_layui_iframe()
+        iframe_meta: dict[str, Any] | None = None
+        if frame is not None:
+            try:
+                iframe_scan = await frame.evaluate(IFRAME_OPTION_SCAN_SCRIPT)
+            except Exception:
+                iframe_scan = None
+            if isinstance(iframe_scan, dict):
+                iframe_meta = {
+                    "url": iframe_scan.get("url"),
+                    "title": iframe_scan.get("title"),
+                    "option_count": len(iframe_scan.get("options") or []),
+                }
+                for item in iframe_scan.get("options") or []:
+                    item = dict(item)
+                    item["source"] = "iframe"
+                    options.append(item)
+                widgets.append(
+                    {
+                        "widget_id": "iframe-area-picker",
+                        "role": "iframe",
+                        "class_name": "layui-layer-iframe",
+                        "summary": f"iframe options={iframe_meta['option_count']}",
+                        "header_text": str(iframe_scan.get("title") or ""),
+                        "current_year": None,
+                        "current_month": None,
+                    }
+                )
+        return {
+            "widgets": widgets,
+            "options": options,
+            "controls": controls,
+            "iframe": iframe_meta,
+        }
+
+    async def _click_text_in_frame(self, frame: Any, raw_value: Any) -> dict[str, Any]:
+        return await frame.evaluate(
+            """(wantedRaw) => {
+              const norm = (s) => String(s || '').replace(/[\\s_\\-—:：省市区县]/g, '').toLowerCase();
+              const wanted = norm(wantedRaw);
+              if (!wanted) return {ok: false, error: 'empty'};
+              const visible = (el) => {
+                const s = getComputedStyle(el);
+                return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.getClientRects().length > 0;
+              };
+              const nodes = Array.from(document.querySelectorAll(
+                "a, li, td, span, div, label, button, [onclick], [role='option'], [role='treeitem']"
+              )).filter(visible);
+              const scored = [];
+              for (const el of nodes) {
+                const text = String(el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                if (!text || text.length > 24) continue;
+                if (/^(确定|清除|关闭|取消|确认|提交|请选择)$/.test(text)) continue;
+                if (el.querySelectorAll('a, li, td').length > 3) continue;
+                const n = norm(text);
+                if (!n) continue;
+                let score = -1;
+                if (n === wanted) score = 100;
+                else if (n.includes(wanted) || wanted.includes(n)) score = 70 - Math.abs(n.length - wanted.length);
+                if (score < 0) continue;
+                scored.push({el, text, score});
+              }
+              scored.sort((a, b) => b.score - a.score || a.text.length - b.text.length);
+              if (!scored.length) {
+                return {
+                  ok: false,
+                  error: 'not_found',
+                  available: nodes.map(n => String(n.innerText || n.textContent || '').replace(/\\s+/g,' ').trim())
+                    .filter(t => t && t.length <= 24 && !/^(确定|清除|关闭|取消)$/.test(t))
+                    .slice(0, 80),
+                };
+              }
+              const bestScore = scored[0].score;
+              const top = scored.filter(item => item.score === bestScore);
+              const shortest = Math.min(...top.map(item => item.text.length));
+              const finalists = top.filter(item => item.text.length === shortest);
+              if (finalists.length !== 1) {
+                return {ok: false, error: 'ambiguous', candidate_count: finalists.length, available: finalists.map(i => i.text)};
+              }
+              finalists[0].el.click();
+              return {ok: true, text: finalists[0].text};
+            }""",
+            str(raw_value),
+        )
+
+    async def _confirm_top_layui_layer(self) -> bool:
+        if self.page is None:
+            return False
+        return bool(
+            await self.page.evaluate(
+                """() => {
+                  const visible = (el) => {
+                    const s = getComputedStyle(el);
+                    return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.getClientRects().length > 0;
+                  };
+                  const layers = Array.from(document.querySelectorAll('.layui-layer')).filter(visible);
+                  if (!layers.length) return false;
+                  const top = layers[layers.length - 1];
+                  const btn = top.querySelector('.layui-layer-btn0')
+                    || Array.from(top.querySelectorAll('a, button')).find(node => /^(确定|确认|OK)$/i.test(String(node.innerText || '').trim()));
+                  if (!btn) return false;
+                  btn.click();
+                  return true;
+                }"""
+            )
+        )
 
     async def _field(self, field_id: str) -> tuple[Any, dict[str, Any]]:
         snapshot = await self.inspect()
@@ -796,6 +984,10 @@ class PlaywrightFormBrowser:
         # Disabled/readonly region pickers are opened via nearby triggers, not typed into.
         if field.get("disabled") and not regionish and not field.get("read_only"):
             return {"ok": False, "error": "字段不可交互", "field_id": field_id}
+        if regionish:
+            # Avoid stacking multiple area iframes from previous failed attempts.
+            await self.close_layui_layers()
+            await self.page.wait_for_timeout(120)
         clicked = await self.page.evaluate(
             """(id) => {
               const el = document.querySelector(`[data-formpilot-id="${id}"]`);
@@ -853,7 +1045,7 @@ class PlaywrightFormBrowser:
                     "field_id": field_id,
                     "detail": clicked,
                 }
-        await self.page.wait_for_timeout(450)
+        await self.page.wait_for_timeout(550 if regionish else 400)
         widget = await self.inspect_widget()
         return {
             "ok": True,
@@ -862,14 +1054,23 @@ class PlaywrightFormBrowser:
             "widgets": widget["widgets"],
             "options": widget["options"][:200],
             "controls": widget["controls"][:100],
+            "iframe": widget.get("iframe"),
         }
 
     async def _click_widget_item(self, item_id: str) -> None:
         locator = self.page.locator(f'[data-formpilot-id="{item_id}"]')
-        if await locator.count() != 1:
-            raise RuntimeError(f"Widget item is missing or ambiguous: {item_id}")
-        await locator.click(force=True)
-        await self.page.wait_for_timeout(250)
+        if await locator.count() == 1:
+            await locator.click(force=True)
+            await self.page.wait_for_timeout(250)
+            return
+        frame = await self._top_layui_iframe()
+        if frame is not None:
+            frame_locator = frame.locator(f'[data-formpilot-id="{item_id}"]')
+            if await frame_locator.count() == 1:
+                await frame_locator.click(force=True)
+                await self.page.wait_for_timeout(250)
+                return
+        raise RuntimeError(f"Widget item is missing or ambiguous: {item_id}")
 
     async def click_widget_option(self, option_id: str) -> dict[str, Any]:
         widget = await self.inspect_widget()
@@ -923,24 +1124,80 @@ class PlaywrightFormBrowser:
         opened = await self.open_field(field_id)
         if not opened["ok"]:
             return opened
-        if not opened.get("options"):
-            await self.page.wait_for_timeout(500)
-            widget = await self.inspect_widget()
-            opened["options"] = widget["options"][:200]
-            opened["widgets"] = widget["widgets"]
-            if not opened["options"]:
-                return {
-                    "ok": False,
-                    "error": "已点击地区字段但未出现可选弹层，请 inspect_widget 或换触发方式",
-                    "field_id": field_id,
-                    "open_via": opened.get("open_via"),
-                }
+
+        # Tongji area pickers render province/city/district inside a layui iframe.
+        frame = await self._top_layui_iframe()
+        selected_labels: list[str] = []
+        if frame is not None:
+            for level, raw_value in enumerate(path):
+                clicked = await self._click_text_in_frame(frame, raw_value)
+                if not clicked.get("ok"):
+                    return {
+                        "ok": False,
+                        "error": "级联选项不存在或不唯一",
+                        "mode": "layui_iframe",
+                        "level": level,
+                        "wanted": str(raw_value),
+                        "candidate_count": clicked.get("candidate_count") or 0,
+                        "available_options": (clicked.get("available") or [])[:100],
+                        "field_id": field_id,
+                    }
+                selected_labels.append(str(clicked.get("text") or raw_value))
+                await self.page.wait_for_timeout(350)
+                # Some pickers navigate iframe content; refresh frame handle each level.
+                nxt = await self._top_layui_iframe()
+                if nxt is not None:
+                    frame = nxt
+            confirmed = await self._confirm_top_layui_layer()
+            await self.page.wait_for_timeout(350)
+            snapshot = await self.inspect()
+            field = next((item for item in snapshot["fields"] if item["field_id"] == field_id), None)
+            has_value = bool(field and field.get("has_value"))
+            if not has_value:
+                locator, _field = await self._field(field_id)
+                try:
+                    actual = await locator.input_value()
+                except Exception:
+                    actual = ""
+                has_value = bool(str(actual or "").strip()) and not re.match(
+                    r"^(请选择|点击选择|选择)", str(actual or "").strip()
+                )
+            return {
+                "ok": has_value,
+                "field_id": field_id,
+                "mode": "layui_iframe",
+                "selected_levels": len(selected_labels),
+                "selected_labels": selected_labels,
+                "confirmed": confirmed,
+                "has_value": has_value,
+            }
+
+        # Fallback: non-iframe custom widgets on the main page.
+        widget = await self.inspect_widget()
+        options = [
+            item for item in (widget.get("options") or [])
+            if not re.fullmatch(r"确定|清除|关闭|取消|确认", str(item.get("text") or "").strip())
+        ]
+        if not options:
+            return {
+                "ok": False,
+                "error": "已点击地区字段但未出现可选弹层（也未找到 layui iframe）",
+                "field_id": field_id,
+                "open_via": opened.get("open_via"),
+                "widgets": [
+                    {"class_name": w.get("class_name"), "summary": w.get("summary")}
+                    for w in (widget.get("widgets") or [])[:8]
+                ],
+            }
         selected_count = 0
         for level, raw_value in enumerate(path):
             widget = await self.inspect_widget()
-            candidates = self._match_cascade_option(widget["options"], raw_value, level)
+            page_options = [
+                item for item in (widget.get("options") or [])
+                if not re.fullmatch(r"确定|清除|关闭|取消|确认", str(item.get("text") or "").strip())
+            ]
+            candidates = self._match_cascade_option(page_options, raw_value, level)
             if len(candidates) != 1:
-                # Unique-by-shortest-text when several soft matches share a prefix.
                 if len(candidates) > 1:
                     candidates = sorted(
                         candidates,
@@ -955,17 +1212,16 @@ class PlaywrightFormBrowser:
                     return {
                         "ok": False,
                         "error": "级联选项不存在或不唯一",
+                        "mode": "page_widget",
                         "level": level,
                         "wanted": str(raw_value),
                         "candidate_count": len(candidates),
-                        "available_options": [
-                            item["text"] for item in widget["options"] if not item["disabled"]
-                        ][:100],
+                        "available_options": [item["text"] for item in page_options if not item.get("disabled")][:100],
                     }
             await self._click_widget_item(candidates[0]["option_id"])
             selected_count += 1
             await self.page.wait_for_timeout(200)
-        # Prefer fresh inspect has_value; some pickers mirror text into siblings.
+        await self._confirm_top_layui_layer()
         snapshot = await self.inspect()
         field = next((item for item in snapshot["fields"] if item["field_id"] == field_id), None)
         has_value = bool(field and field.get("has_value"))
@@ -981,6 +1237,7 @@ class PlaywrightFormBrowser:
         return {
             "ok": selected_count == len(path) and has_value,
             "field_id": field_id,
+            "mode": "page_widget",
             "selected_levels": selected_count,
             "has_value": has_value,
         }

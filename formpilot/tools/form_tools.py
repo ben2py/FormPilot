@@ -412,8 +412,6 @@ class FormPilotTools:
               let dismissed = 0;
               const shades = Array.from(document.querySelectorAll('.layui-layer-shade, .layui-layer'));
               for (const node of shades) {
-                const btn = node.querySelector('.layui-layer-btn0, .layui-layer-close, button, a');
-                if (btn) { btn.click(); dismissed += 1; continue; }
                 node.remove();
                 dismissed += 1;
               }
