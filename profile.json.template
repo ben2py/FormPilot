@@ -29,7 +29,8 @@
     "province": "浙江省",
     "city": "温州市",
     "district": "瑞安市",
-    "hukou_location": "浙江省温州市瑞安市"
+    "hukou_location": "浙江省温州市瑞安市",
+    "hukou_detail_address": "浙江省温州市瑞安市安阳街道万松东路283弄11幢1单元501室"
   },
   "archive": {
     "unit": "示例大学",

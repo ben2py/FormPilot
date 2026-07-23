@@ -28,6 +28,8 @@ The model never receives an arbitrary JavaScript execution tool. Browser operati
 |---|---|---|
 | API configuration | `.env` / process environment | Local, Git-ignored |
 | Personal form data | `profile.json` | Local, Git-ignored |
+| Task brief | `task.md` | Local, usually Git-ignored |
+| Run trajectory | `.formpilot/logs/run-*.jsonl` | Local, Git-ignored |
 | Browser login state | `.formpilot/browser-profile` | Local, Git-ignored |
 | LLM conversation | `FormPilotAgent.run()` | Memory for one run |
 | One-time approvals | `ApprovalPolicy` | Memory, consumed once |

@@ -69,9 +69,10 @@ PLAYWRIGHT_BROWSERS_PATH=.formpilot/browsers playwright install chromium
 ```bash
 cp .env.example .env
 cp examples/profile.example.json profile.json
+cp examples/task.example.md task.md
 ```
 
-将 API Key 写入 `.env` 的 `OPENAI_API_KEY`。`.env` 和 `profile.json` 都已加入 `.gitignore`；不要在资料文件中保存 API Key、密码或验证码。
+将 API Key 写入 `.env` 的 `OPENAI_API_KEY`。`.env`、`profile.json` 和本地 `task.md` 中的敏感内容不要提交；不要在任务文档里写密码或验证码。
 
 使用 DeepSeek V4 时，把 `OPENAI_BASE_URL` 指向 DeepSeek，并设置模型名：
 
@@ -83,17 +84,43 @@ FORMPILOT_MODEL=deepseek-v4-flash
 
 `FORMPILOT_API_MODE` 默认为 `auto`：遇到 DeepSeek 模型或 base URL 时会自动走 Chat Completions（含 thinking 工具回传），其他情况仍使用 Responses API。
 
+图形验证码识图使用**独立**视觉模型（与 `FORMPILOT_MODEL` 分开），例如通义 VL：
+
+```bash
+FORMPILOT_VISION_MODEL=qwen3-vl-plus
+FORMPILOT_VISION_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+FORMPILOT_VISION_API_KEY=sk-...
+```
+
+DeepSeek 官方 API 不支持传图；未配置 `FORMPILOT_VISION_*` 时只会走本地 `ddddocr`，失败则暂停人工填写。
+
 ## 运行
 
-启动 Agent：
+先编辑 `task.md`，用平常说话的方式写清楚你要报什么、希望怎么走，再启动 Agent：
 
 ```bash
 formpilot \
   --url "https://目标报名网站/" \
-  --profile profile.json
+  --profile profile.json \
+  --task task.md
 ```
 
+Agent 会自己阅读这份说明：已知信息直接填，拿不准的会结合资料和页面内容自行判断；只有登录、验证码等情况才会暂停。行动轨迹写入 `.formpilot/logs/run-*.jsonl`。
+
 默认自动加载当前目录的 `.env`，也可以通过 `--env-file /path/to/config.env` 指定其他文件。已经存在的进程环境变量优先于 `.env`。
+
+可用自然语言补充指引，Agent 会优先按指引自主选择菜单/入口：
+
+```bash
+formpilot \
+  --url "https://example.com/form" \
+  --profile profile.json \
+  --task task.md \
+  --guidance "报考博士研究生" \
+  --guidance "从网上报名进入信息填报"
+```
+
+运行中若出现 `pause_for_user`，除了在浏览器里操作外，也可以在终端直接输入一句话指引后回车；只按 Enter 则表示无额外说明、继续执行。
 
 默认使用 `gpt-5.6-terra`，它适合平衡工具决策能力和成本。可以覆盖：
 
@@ -138,6 +165,8 @@ python3 -m compileall -q formpilot
 - `formpilot/policy.py`：秘密字段、外部副作用和一次性审批策略；
 - `formpilot/profile.py`：本地资料库及脱敏目录；
 - `formpilot/cli.py`：命令行入口；
+- `formpilot/task.py`：任务文档加载与已知事实解析；
+- `formpilot/logging_util.py`：行动轨迹 JSONL 日志；
 - `tests_python/`：Python Agent 与安全测试；
 - `scripts/`：真实浏览器冒烟测试；
 - `demo/`：只在本地使用的动态报名测试页。

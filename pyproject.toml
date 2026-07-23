@@ -10,7 +10,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "openai>=2.7.0,<3",
-  "playwright>=1.50,<2"
+  "playwright>=1.50,<2",
+  "ddddocr>=1.5,<2"
 ]
 
 [project.scripts]

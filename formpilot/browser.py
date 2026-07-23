@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import re
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from .credentials import match_select_option
 
 
 SCAN_SCRIPT = r"""
@@ -29,51 +34,158 @@ SCAN_SCRIPT = r"""
     clone.querySelectorAll("input, select, textarea, button, [contenteditable='true'], [role='listbox'], [role='tree'], [role='dialog']").forEach(x => x.remove());
     return compact(clone.innerText || clone.textContent);
   };
-  const explicitLabel = (el) => {
+  const normalizeLabel = (text) => compact(String(text || "").replace(/[*＊]+/g, " ").replace(/[：:]+$/g, " "));
+  // Chinese forms almost always mark required fields with * / ＊ next to the label.
+  const textLooksRequired = (text) => /[*＊]|必填|必需|必须/.test(String(text || ""));
+  const cellLooksRequired = (cell) => {
+    if (!cell) return false;
+    const raw = String(cell.innerText || cell.textContent || "");
+    if (textLooksRequired(raw)) return true;
+    return Boolean(cell.querySelector(
+      ".red, .required, .require, .must, font[color*='red' i], [style*='color:red' i], [style*='color: red' i], [class*='required'], [class*='asterisk']"
+    ));
+  };
+  const rawTableLabel = (el) => {
+    const td = el.closest("td, th");
+    if (!td) return "";
+    const prev = td.previousElementSibling;
+    if (prev && (prev.tagName === "TD" || prev.tagName === "TH")) {
+      return cleanLabelText(prev) || compact(prev.innerText || prev.textContent);
+    }
+    const row = td.parentElement;
+    if (row) {
+      const th = Array.from(row.children).find(x => x.tagName === "TH");
+      if (th && th !== td) return cleanLabelText(th) || compact(th.innerText || th.textContent);
+    }
+    return "";
+  };
+  const tableLabel = (el) => normalizeLabel(rawTableLabel(el));
+  const rawExplicitLabel = (el) => {
     if (!el.id) return "";
     const label = Array.from(document.querySelectorAll("label[for]")).find(x => x.getAttribute("for") === el.id);
     return cleanLabelText(label);
   };
-  const nearby = (el) => {
+  const explicitLabel = (el) => normalizeLabel(rawExplicitLabel(el));
+  const rawNearby = (el) => {
     const wrapping = el.closest("label");
     if (wrapping) return cleanLabelText(wrapping);
     const siblings = [el.previousElementSibling, el.nextElementSibling].map(x => compact(x && x.innerText, 70)).filter(Boolean);
     if (siblings.length) return siblings.join(" ");
-    let parent = el.parentElement;
-    for (let i = 0; parent && i < 4; i += 1, parent = parent.parentElement) {
-      const text = compact(parent.innerText, 160);
-      if (text && text.length <= 120) return text;
-    }
     return "";
   };
-  const labelFor = (el) => explicitLabel(el) || compact(el.getAttribute("aria-label")) || nearby(el)
+  const nearby = (el) => normalizeLabel(rawNearby(el));
+  const labelFor = (el) => tableLabel(el) || explicitLabel(el) || compact(el.getAttribute("aria-label")) || nearby(el)
     || compact(el.getAttribute("placeholder")) || compact(el.name) || compact(el.id) || "未命名字段";
+  const isRequired = (el) => {
+    if (el.required || el.getAttribute("aria-required") === "true") return true;
+    // Prefer visible "*" next to the label — the common web convention.
+    if (textLooksRequired(rawTableLabel(el)) || textLooksRequired(rawExplicitLabel(el)) || textLooksRequired(rawNearby(el))) {
+      return true;
+    }
+    const wrapping = el.closest("label");
+    if (wrapping && (textLooksRequired(wrapping.innerText || wrapping.textContent) || cellLooksRequired(wrapping))) {
+      return true;
+    }
+    const td = el.closest("td, th");
+    if (td && cellLooksRequired(td.previousElementSibling)) return true;
+    if (td && cellLooksRequired(td)) return true;
+    // Same-row label cells (multi-column: 标签|输入|标签|输入).
+    const row = el.closest("tr");
+    if (row && td) {
+      const cells = Array.from(row.children);
+      const idx = cells.indexOf(td);
+      if (idx > 0 && cellLooksRequired(cells[idx - 1])) return true;
+      const header = cells.find(x => x.tagName === "TH" || x.classList.contains("label"));
+      if (cellLooksRequired(header)) return true;
+    }
+    // Walk a few ancestors for "*姓名" style labels outside strict table markup.
+    let parent = el.parentElement;
+    for (let i = 0; parent && i < 5; i += 1, parent = parent.parentElement) {
+      if (parent.matches && parent.matches("form, body, html, table, tbody")) break;
+      const own = compact(
+        Array.from(parent.childNodes)
+          .filter(n => n.nodeType === 3 || (n.nodeType === 1 && !n.contains(el) && !/^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(n.tagName || "")))
+          .map(n => n.innerText || n.textContent || "")
+          .join(" "),
+        80
+      );
+      if (textLooksRequired(own)) return true;
+    }
+    const item = el.closest(".el-form-item, .ant-form-item, .form-group, .layui-form-item, .form-item, .field, .item");
+    if (item && (textLooksRequired(item.innerText || "") || item.querySelector(".required, .red, [class*='asterisk']"))) return true;
+    return false;
+  };
+  const selectMeaningful = (el) => {
+    const opt = el.selectedOptions && el.selectedOptions[0];
+    if (!opt) return {value: "", meaningful: false};
+    const text = compact(opt.text);
+    const value = String(opt.value || "");
+    const placeholder = /请选择|^-+$|^\s*$/.test(text) || value === "-1" || value === "";
+    return {value, text, meaningful: !placeholder && !opt.disabled};
+  };
+  const isPlaceholderValue = (v) => {
+    const text = compact(v);
+    return !text || /^(请选择|点击选择|选择|请填写)/.test(text) || text === "-" || text === "--" || text === "—";
+  };
+  const looksLikeRegionLabel = (label) => /出生地|籍贯|户口|所在地|省市|地区|归属地|生源地/.test(String(label || ""));
 
   const fields = Array.from(document.querySelectorAll("input, select, textarea, [contenteditable='true']"))
     .filter(visible).slice(0, 300).map(el => {
       const tag = el.tagName.toLowerCase();
       const type = tag === "select" ? "select" : String(el.getAttribute("type") || tag).toLowerCase();
+      const label = labelFor(el);
+      let current_value = type === "checkbox" || type === "radio" ? Boolean(el.checked) : String(el.value || "");
+      let has_value = type === "checkbox" || type === "radio" ? Boolean(el.checked) : !isPlaceholderValue(current_value);
+      if (tag === "select") {
+        const selected = selectMeaningful(el);
+        current_value = selected.value;
+        has_value = selected.meaningful;
+      }
+      const readOnly = Boolean(el.readOnly);
+      const needsCascade = readOnly && (looksLikeRegionLabel(label) || isPlaceholderValue(el.getAttribute("placeholder")) || /area|region|city|cascade|picker/i.test(`${el.id} ${el.name} ${el.className || ""}`));
       return {
         field_id: idFor(el, "field"), tag, type, id: el.id || "", name: el.name || "",
-        label: labelFor(el), placeholder: el.getAttribute("placeholder") || "",
-        required: Boolean(el.required || el.getAttribute("aria-required") === "true"),
-        disabled: Boolean(el.disabled), read_only: Boolean(el.readOnly),
-        current_value: type === "checkbox" || type === "radio" ? Boolean(el.checked) : String(el.value || ""),
+        label, placeholder: el.getAttribute("placeholder") || "",
+        required: isRequired(el),
+        disabled: Boolean(el.disabled), read_only: readOnly,
+        needs_cascade: needsCascade,
+        current_value,
+        has_value,
         option_value: type === "radio" || type === "checkbox" ? String(el.value || "") : null,
         options: tag === "select" ? Array.from(el.options).slice(0, 200).map(o => ({text: compact(o.text), value: o.value, selected: o.selected, disabled: o.disabled})) : null
       };
     });
-  const controls = Array.from(document.querySelectorAll("button, input[type='button'], input[type='submit'], a[role='button']"))
-    .filter(visible).slice(0, 100).map(el => ({
-      control_id: idFor(el, "control"),
+  const controls = [];
+  const seenControls = new Set();
+  const pushControl = (el, type) => {
+    const controlId = idFor(el, "control");
+    if (seenControls.has(controlId)) return;
+    seenControls.add(controlId);
+    controls.push({
+      control_id: controlId,
       label: compact(el.innerText || el.value || el.getAttribute("aria-label") || el.title || "未命名按钮"),
-      type: String(el.getAttribute("type") || el.tagName).toLowerCase(),
+      type,
+      href: el.tagName === "A" ? compact(el.getAttribute("href"), 200) : "",
       disabled: Boolean(el.disabled || el.getAttribute("aria-disabled") === "true")
-    }));
+    });
+  };
+  Array.from(document.querySelectorAll("button, input[type='button'], input[type='submit'], a[role='button']"))
+    .filter(visible)
+    .slice(0, 100)
+    .forEach(el => pushControl(el, String(el.getAttribute("type") || el.tagName).toLowerCase()));
+  Array.from(document.querySelectorAll("a[href], [role='link']"))
+    .filter(visible)
+    .filter(el => {
+      const href = compact(el.getAttribute("href") || el.href || "", 200);
+      if (href && /^javascript:/i.test(href)) return false;
+      return Boolean(compact(el.innerText || el.getAttribute("aria-label") || el.title || el.textContent, 80));
+    })
+    .slice(0, 80)
+    .forEach(el => pushControl(el, "link"));
   document.documentElement.dataset.formpilotSequence = String(sequence);
-  const feedback = Array.from(document.querySelectorAll("[role='alert'], .error, .invalid-feedback, .el-form-item__error, .ant-form-item-explain-error"))
+  const feedback = Array.from(document.querySelectorAll("[role='alert'], .error, .invalid-feedback, .el-form-item__error, .ant-form-item-explain-error, .layui-layer-content"))
     .filter(visible).slice(0, 30).map(el => compact(el.innerText, 200)).filter(Boolean);
-  return {title: document.title, url: location.href, fields, controls, feedback};
+  return {title: document.title, url: location.href, fields, controls: controls.slice(0, 160), feedback};
 }
 """
 
@@ -98,17 +210,30 @@ WIDGET_SCAN_SCRIPT = r"""
     ".el-popper", ".el-picker-panel", ".el-cascader-panel",
     ".ant-select-dropdown", ".ant-cascader-menus", ".ant-picker-dropdown",
     "[class*='cascader-panel']", "[class*='picker-panel']", "[class*='picker-dropdown']",
-    "[class*='date-panel']", "[class*='calendar-panel']", "[class*='calendar-popover']"
+    "[class*='date-panel']", "[class*='calendar-panel']", "[class*='calendar-popover']",
+    ".layui-layer", ".layui-layer-content", ".layui-anim", ".layui-tree",
+    "[class*='city-picker']", "[class*='area-picker']", "[class*='region-picker']",
+    "[class*='distpicker']", ".xm-select-dl", "[class*='cascade']"
   ].join(",");
   const roots = Array.from(new Set(Array.from(document.querySelectorAll(rootSelector)).filter(visible))).slice(0, 30);
   const rootFor = (el) => roots.findLast ? roots.findLast(root => root.contains(el)) : [...roots].reverse().find(root => root.contains(el));
   const optionSelector = [
     "[role='option']", "[role='treeitem']", "[role='gridcell']",
-    "li", "td", "[class*='cascader-node']", "[class*='select-option']",
-    "[class*='menu-item']", "[class*='date-table-cell']", "[class*='calendar-cell']"
+    "li", "td", "a",
+    "[class*='cascader-node']", "[class*='select-option']",
+    "[class*='menu-item']", "[class*='date-table-cell']", "[class*='calendar-cell']",
+    "[class*='city-item']", "[class*='area-item']", "[class*='province']"
   ].join(",");
   const optionElements = Array.from(new Set(roots.flatMap(root => Array.from(root.querySelectorAll(optionSelector)))))
-    .filter(visible).slice(0, 500);
+    .filter(visible)
+    .filter(el => {
+      const text = compact(el.innerText || el.textContent, 80);
+      if (!text || text.length > 40) return false;
+      // Prefer leaf-ish nodes: skip containers that nest many other option candidates.
+      const nested = el.querySelectorAll(optionSelector).length;
+      return nested <= 2;
+    })
+    .slice(0, 500);
   const options = optionElements.map(el => {
     const root = rootFor(el);
     const groups = root ? Array.from(root.querySelectorAll("ul, [role='menu'], [role='group'], .ant-cascader-menu, .el-scrollbar__view")) : [];
@@ -215,6 +340,224 @@ class PlaywrightFormBrowser:
         self.last_snapshot = snapshot
         return snapshot
 
+    async def search_visible_text(self, query: str, *, limit: int = 20) -> dict[str, Any]:
+        if self.page is None:
+            raise RuntimeError("Browser is not started")
+        needle = str(query or "").strip()
+        if not needle:
+            return {"ok": False, "error": "query 不能为空", "matches": []}
+        result = await self.page.evaluate(
+            """(args) => {
+              const query = String(args.query || "").trim().toLowerCase();
+              const limit = Number(args.limit || 20);
+              if (!query) return {matches: []};
+              const compact = (v, n = 240) => String(v || "").replace(/\\s+/g, " ").trim().slice(0, n);
+              const visible = (el) => {
+                const s = getComputedStyle(el);
+                return s.display !== "none" && s.visibility !== "hidden" && s.opacity !== "0" && el.getClientRects().length > 0;
+              };
+              const nodes = Array.from(document.querySelectorAll("body *"))
+                .filter(visible)
+                .filter(el => el.children.length === 0 || ["A","BUTTON","LABEL","LI","TD","TH","OPTION","SPAN","P","DIV","H1","H2","H3","H4"].includes(el.tagName));
+              const matches = [];
+              const seen = new Set();
+              for (const el of nodes) {
+                const text = compact(el.innerText || el.textContent || el.value || "", 240);
+                if (!text || text.length < query.length) continue;
+                if (!text.toLowerCase().includes(query)) continue;
+                if (seen.has(text)) continue;
+                seen.add(text);
+                matches.push({
+                  text,
+                  tag: el.tagName.toLowerCase(),
+                  href: el.tagName === "A" ? compact(el.getAttribute("href") || "", 200) : ""
+                });
+                if (matches.length >= limit) break;
+              }
+              return {matches};
+            }""",
+            {"query": needle, "limit": max(1, min(int(limit), 50))},
+        )
+        return {"ok": True, "query": needle, "matches": result.get("matches") or []}
+
+    async def capture_captcha_image(self, field_id: str) -> dict[str, Any]:
+        """Screenshot the captcha image nearest to a captcha input field."""
+        if self.page is None:
+            raise RuntimeError("Browser is not started")
+        locator = self.page.locator(f'[data-formpilot-id="{field_id}"]')
+        if await locator.count() != 1:
+            return {"ok": False, "error": "captcha field locator is not unique"}
+
+        handle = await locator.element_handle()
+        if handle is None:
+            return {"ok": False, "error": "captcha field handle missing"}
+        image_info = await self.page.evaluate(
+            """(el) => {
+              const visible = (node) => {
+                if (!node) return false;
+                const s = getComputedStyle(node);
+                return s.display !== "none" && s.visibility !== "hidden" && s.opacity !== "0" && node.getClientRects().length > 0;
+              };
+              const mark = (node) => {
+                let sequence = Number(document.documentElement.dataset.formpilotSequence || "0");
+                if (!node.dataset.formpilotId) {
+                  sequence += 1;
+                  node.dataset.formpilotId = `captcha-${sequence}`;
+                  document.documentElement.dataset.formpilotSequence = String(sequence);
+                }
+                return node.dataset.formpilotId;
+              };
+              const boxOf = (node) => {
+                const r = node.getBoundingClientRect();
+                return {x: r.x, y: r.y, w: r.width, h: r.height};
+              };
+              const fieldBox = boxOf(el);
+              const scoreNode = (node) => {
+                if (!visible(node)) return null;
+                const tag = node.tagName.toLowerCase();
+                if (tag !== "img" && tag !== "canvas") return null;
+                const box = boxOf(node);
+                if (box.w < 24 || box.h < 12 || box.w > 360 || box.h > 160) return null;
+                const src = String(node.getAttribute("src") || node.currentSrc || "");
+                const id = String(node.id || "");
+                const cls = String(node.className || "");
+                const onclick = String(node.getAttribute("onclick") || "");
+                const alt = String(node.getAttribute("alt") || "");
+                const blob = `${src} ${id} ${cls} ${onclick} ${alt}`.toLowerCase();
+                let score = 0;
+                if (/captcha|validate|verify|vcode|yzm|checkcode|rand|authcode/.test(blob)) score += 50;
+                if (/code/.test(blob)) score += 10;
+                if (tag === "img" || tag === "canvas") score += 5;
+                // Prefer siblings/nearby horizontally to the right of the input.
+                const dx = Math.abs((box.x + box.w / 2) - (fieldBox.x + fieldBox.w / 2));
+                const dy = Math.abs((box.y + box.h / 2) - (fieldBox.y + fieldBox.h / 2));
+                if (dy < 40) score += 30;
+                if (dy < 80) score += 10;
+                if (box.x >= fieldBox.x - 8) score += 15;
+                score -= Math.min(dx / 20, 20);
+                score -= Math.min(dy / 10, 20);
+                // Typical captcha aspect ratio is wider than tall.
+                if (box.w >= box.h * 1.2) score += 8;
+                return {node, score, box, tag, src: src.slice(0, 200)};
+              };
+
+              const candidates = [];
+              let parent = el.parentElement;
+              for (let i = 0; parent && i < 6; i += 1, parent = parent.parentElement) {
+                for (const node of parent.querySelectorAll("img, canvas")) {
+                  const scored = scoreNode(node);
+                  if (scored) candidates.push(scored);
+                }
+              }
+              for (const node of document.querySelectorAll(
+                "img[src*='captcha'], img[src*='code'], img[src*='verify'], img[src*='validate'], img[src*='yzm'], img[onclick*='code'], img[onclick*='Captcha'], canvas"
+              )) {
+                const scored = scoreNode(node);
+                if (scored) candidates.push(scored);
+              }
+              // Deduplicate by formpilot id / object identity.
+              const seen = new Set();
+              const unique = [];
+              for (const item of candidates) {
+                const key = item.node;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                unique.push(item);
+              }
+              unique.sort((a, b) => b.score - a.score);
+              if (!unique.length) return null;
+              const best = unique[0];
+              return {
+                image_id: mark(best.node),
+                tag: best.tag,
+                score: best.score,
+                width: Math.round(best.box.w),
+                height: Math.round(best.box.h),
+                src: best.src,
+              };
+            }""",
+            handle,
+        )
+        if not image_info or not image_info.get("image_id"):
+            return {"ok": False, "error": "未找到验证码图片"}
+        image_locator = self.page.locator(f'[data-formpilot-id="{image_info["image_id"]}"]')
+        if await image_locator.count() != 1:
+            return {"ok": False, "error": "验证码图片定位不唯一"}
+        try:
+            await image_locator.wait_for(state="visible", timeout=2000)
+        except Exception:
+            pass
+
+        # Element screenshots of captcha <img> are often blank white (e.g. Tongji
+        # /captcha/imageCode). Prefer downloading the image bytes with the page
+        # session cookies, then mirror those bytes into the <img> so OCR and the
+        # visible/server captcha stay in sync.
+        png = b""
+        method = "screenshot"
+        src = str(image_info.get("src") or "").strip()
+        if str(image_info.get("tag") or "").lower() == "img" and src and not src.lower().startswith("data:"):
+            absolute = await self.page.evaluate(
+                """(raw) => {
+                  try { return new URL(raw, location.href).href; } catch (e) { return ""; }
+                }""",
+                src,
+            )
+            if absolute:
+                parts = urlsplit(absolute)
+                query = dict(parse_qsl(parts.query, keep_blank_values=True))
+                query["curDate"] = str(int(time.time() * 1000))
+                refresh_url = urlunsplit(
+                    (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+                )
+                try:
+                    response = await self.page.request.get(refresh_url)
+                    body = await response.body() if response.ok else b""
+                    content_type = (response.headers.get("content-type") or "").lower()
+                    if body and len(body) >= 80 and (
+                        "image/" in content_type
+                        or body[:8] == b"\x89PNG\r\n\x1a\n"
+                        or body[:2] == b"\xff\xd8"
+                        or body[:6] in {b"GIF87a", b"GIF89a"}
+                    ):
+                        png = body
+                        method = "network"
+                        if "jpeg" in content_type or "jpg" in content_type:
+                            mime = "image/jpeg"
+                        elif "gif" in content_type:
+                            mime = "image/gif"
+                        elif "webp" in content_type:
+                            mime = "image/webp"
+                        else:
+                            mime = "image/png"
+                        data_url = f"data:{mime};base64," + base64.b64encode(png).decode("ascii")
+                        await self.page.evaluate(
+                            """({imageId, dataUrl}) => {
+                              const node = document.querySelector(`[data-formpilot-id="${imageId}"]`);
+                              if (node && node.tagName === "IMG") {
+                                node.src = dataUrl;
+                              }
+                            }""",
+                            {"imageId": image_info["image_id"], "dataUrl": data_url},
+                        )
+                except Exception:
+                    png = b""
+
+        if not png:
+            png = await image_locator.screenshot(type="png")
+            method = "screenshot"
+
+        return {
+            "ok": True,
+            "image_id": image_info["image_id"],
+            "tag": image_info.get("tag"),
+            "score": image_info.get("score"),
+            "width": image_info.get("width"),
+            "height": image_info.get("height"),
+            "src": image_info.get("src"),
+            "method": method,
+            "png": png,
+        }
+
     async def wait_and_rescan(self, milliseconds: int = 800) -> dict[str, Any]:
         await asyncio.sleep(max(0, min(milliseconds, 5000)) / 1000)
         return await self.inspect()
@@ -241,11 +584,7 @@ class PlaywrightFormBrowser:
         text_value = str(value)
         if field["tag"] == "select":
             options = field.get("options") or []
-            normalized = lambda text: re.sub(r"[\s_\-—:：]", "", str(text)).lower()
-            wanted = normalized(text_value)
-            option = next((o for o in options if normalized(o["text"]) == wanted or normalized(o["value"]) == wanted), None)
-            if option is None:
-                option = next((o for o in options if wanted and (wanted in normalized(o["text"]) or normalized(o["text"]) in wanted)), None)
+            option = match_select_option(options, text_value)
             if option is None:
                 return {"ok": False, "error": "当前下拉选项没有资料对应值", "available_options": [o["text"] for o in options]}
             await locator.select_option(value=option["value"])
@@ -261,10 +600,41 @@ class PlaywrightFormBrowser:
 
     async def open_field(self, field_id: str) -> dict[str, Any]:
         locator, field = await self._field(field_id)
-        if field["disabled"]:
+        # Readonly region pickers are intentionally clickable; only skip inert disabled
+        # fields that are not marked as cascade targets.
+        if field.get("disabled") and not (field.get("read_only") or field.get("needs_cascade")):
             return {"ok": False, "error": "字段不可交互"}
-        await locator.click()
-        await self.page.wait_for_timeout(150)
+        clicked = False
+        try:
+            await locator.click(force=True, timeout=2000)
+            clicked = True
+        except Exception:
+            clicked = False
+        if not clicked:
+            # Some Tongji/layui pickers put the handler on the parent cell / sibling.
+            clicked = bool(
+                await self.page.evaluate(
+                    """(id) => {
+                      const el = document.querySelector(`[data-formpilot-id="${id}"]`);
+                      if (!el) return false;
+                      const candidates = [
+                        el,
+                        el.parentElement,
+                        el.closest("td"),
+                        el.nextElementSibling,
+                        el.previousElementSibling,
+                      ].filter(Boolean);
+                      for (const node of candidates) {
+                        try { node.click(); return true; } catch (e) {}
+                      }
+                      return false;
+                    }""",
+                    field_id,
+                )
+            )
+        if not clicked:
+            return {"ok": False, "error": "无法打开字段选择器"}
+        await self.page.wait_for_timeout(400)
         widget = await self.inspect_widget()
         return {
             "ok": True,
@@ -278,8 +648,8 @@ class PlaywrightFormBrowser:
         locator = self.page.locator(f'[data-formpilot-id="{item_id}"]')
         if await locator.count() != 1:
             raise RuntimeError(f"Widget item is missing or ambiguous: {item_id}")
-        await locator.click()
-        await self.page.wait_for_timeout(150)
+        await locator.click(force=True)
+        await self.page.wait_for_timeout(250)
 
     async def click_widget_option(self, option_id: str) -> dict[str, Any]:
         widget = await self.inspect_widget()
@@ -305,6 +675,28 @@ class PlaywrightFormBrowser:
     def _normalized(value: Any) -> str:
         return re.sub(r"[\s_\-—:：省市区县]", "", str(value)).lower()
 
+    def _match_cascade_option(self, options: list[dict[str, Any]], raw_value: Any, level: int) -> list[dict[str, Any]]:
+        wanted = self._normalized(raw_value)
+        if not wanted:
+            return []
+        enabled = [item for item in options if not item.get("disabled")]
+        exact = [
+            item for item in enabled
+            if self._normalized(item.get("text") or item.get("value") or item.get("title")) == wanted
+        ]
+        level_exact = [item for item in exact if item.get("level") in {None, level}]
+        if level_exact:
+            return level_exact
+        if exact:
+            return exact
+        soft = [
+            item for item in enabled
+            if wanted in self._normalized(item.get("text") or item.get("value") or item.get("title"))
+            or self._normalized(item.get("text") or item.get("value") or item.get("title")) in wanted
+        ]
+        level_soft = [item for item in soft if item.get("level") in {None, level}]
+        return level_soft or soft
+
     async def select_cascade(self, field_id: str, path: list[Any]) -> dict[str, Any]:
         if not path:
             return {"ok": False, "error": "级联路径为空"}
@@ -313,28 +705,53 @@ class PlaywrightFormBrowser:
             return opened
         selected_count = 0
         for level, raw_value in enumerate(path):
-            wanted = self._normalized(raw_value)
             widget = await self.inspect_widget()
-            candidates = [
-                item for item in widget["options"]
-                if not item["disabled"] and self._normalized(item["text"] or item["value"]) == wanted
-            ]
-            level_candidates = [item for item in candidates if item.get("level") in {None, level}]
-            if level_candidates:
-                candidates = level_candidates
+            candidates = self._match_cascade_option(widget["options"], raw_value, level)
             if len(candidates) != 1:
-                return {
-                    "ok": False,
-                    "error": "级联选项不存在或不唯一",
-                    "level": level,
-                    "candidate_count": len(candidates),
-                    "available_options": [item["text"] for item in widget["options"] if not item["disabled"]][:100],
-                }
+                # Unique-by-shortest-text when several soft matches share a prefix.
+                if len(candidates) > 1:
+                    candidates = sorted(
+                        candidates,
+                        key=lambda item: len(str(item.get("text") or item.get("value") or "")),
+                    )
+                    shortest = len(str(candidates[0].get("text") or candidates[0].get("value") or ""))
+                    candidates = [
+                        item for item in candidates
+                        if len(str(item.get("text") or item.get("value") or "")) == shortest
+                    ]
+                if len(candidates) != 1:
+                    return {
+                        "ok": False,
+                        "error": "级联选项不存在或不唯一",
+                        "level": level,
+                        "wanted": str(raw_value),
+                        "candidate_count": len(candidates),
+                        "available_options": [
+                            item["text"] for item in widget["options"] if not item["disabled"]
+                        ][:100],
+                    }
             await self._click_widget_item(candidates[0]["option_id"])
             selected_count += 1
-        locator, _field = await self._field(field_id)
-        actual = await locator.input_value()
-        return {"ok": selected_count == len(path), "field_id": field_id, "selected_levels": selected_count, "has_value": bool(actual)}
+            await self.page.wait_for_timeout(200)
+        # Prefer fresh inspect has_value; some pickers mirror text into siblings.
+        snapshot = await self.inspect()
+        field = next((item for item in snapshot["fields"] if item["field_id"] == field_id), None)
+        has_value = bool(field and field.get("has_value"))
+        if not has_value:
+            locator, _field = await self._field(field_id)
+            try:
+                actual = await locator.input_value()
+            except Exception:
+                actual = ""
+            has_value = bool(str(actual or "").strip()) and not re.match(
+                r"^(请选择|点击选择|选择)", str(actual or "").strip()
+            )
+        return {
+            "ok": selected_count == len(path) and has_value,
+            "field_id": field_id,
+            "selected_levels": selected_count,
+            "has_value": has_value,
+        }
 
     @staticmethod
     def _control_direction(control: dict[str, Any]) -> str | None:

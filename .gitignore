@@ -1,6 +1,8 @@
 .venv/
 .formpilot/
 profile.json
+task.md
+credentials.json
 .env
 .env.*
 !.env.example
