@@ -448,7 +448,7 @@ IFRAME_OPTION_SCAN_SCRIPT = r"""
   };
   // Prefer real tree leaves (ztree node_name / anchors), not wrapper li/div with same label.
   const preferred = Array.from(document.querySelectorAll(
-    ".node_name, a[treenode], [treenode_a], span.node_name, li a, [role='treeitem'], [role='option']"
+    ".node_name, a[treenode], [treenode_a], span.node_name, li a, [role='treeitem'], [role='option'], .province-item, .university-item, .city-item, .level0, .level1, .level2"
   )).filter(visible);
   const fallback = Array.from(document.querySelectorAll(
     "a, li, td, span, button, [onclick]"
@@ -1115,14 +1115,51 @@ class PlaywrightFormBrowser:
             str(query),
         )
 
-    async def _click_text_in_frame(self, frame: Any, raw_value: Any) -> dict[str, Any]:
+    async def _list_frame_option_texts(self, frame: Any) -> list[str]:
+        """Return visible option labels inside a layui area-picker iframe."""
+        try:
+            texts = await frame.evaluate(
+                """() => {
+                  const visible = (el) => {
+                    const s = getComputedStyle(el);
+                    return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.getClientRects().length > 0;
+                  };
+                  const out = [];
+                  const seen = new Set();
+                  const nodes = Array.from(document.querySelectorAll(
+                    '.node_name, a[treenode], [treenode_a], span.node_name, .province-item, .university-item, .city-item, .level0, .level1, .level2, li > a, [role="treeitem"]'
+                  )).filter(visible);
+                  for (const el of nodes) {
+                    let text = String(el.textContent || '').replace(/\\s+/g, ' ').trim();
+                    if (!text || text.length > 40) continue;
+                    if (/^(确定|清除|关闭|取消|确认|提交|请选择|关键字|搜索)$/.test(text)) continue;
+                    if (seen.has(text)) continue;
+                    seen.add(text);
+                    out.push(text);
+                  }
+                  return out;
+                }"""
+            )
+        except Exception:
+            return []
+        return [str(item) for item in (texts or []) if str(item).strip()]
+
+    async def _frame_has_option(self, frame: Any, raw_value: Any) -> bool:
+        wanted = self._normalized(raw_value)
+        if not wanted:
+            return False
+        return any(self._normalized(text) == wanted or wanted in self._normalized(text) for text in await self._list_frame_option_texts(frame))
+
+    async def _click_text_in_frame(self, frame: Any, raw_value: Any, *, expand: bool = False) -> dict[str, Any]:
         wanted_raw = str(raw_value or "").strip()
         # Province/city parent filters must NOT go through the keyword box — searching
         # "陕西省" collapses the tree to schools whose names contain 陕西 and then
         # fuzzy-matches the wrong leaf (e.g. 中共陕西省委党校).
-        use_search = not bool(
-            re.search(r"(省|市|区|县|自治州|地区|盟|旗|特别行政区)$", wanted_raw)
-        ) and len(wanted_raw) >= 3
+        use_search = (
+            not expand
+            and not bool(re.search(r"(省|市|区|县|自治州|地区|盟|旗|特别行政区)$", wanted_raw))
+            and len(wanted_raw) >= 3
+        )
         if use_search:
             try:
                 searched = await self._search_in_frame(frame, wanted_raw)
@@ -1132,7 +1169,7 @@ class PlaywrightFormBrowser:
                 await self._pause(450)
 
         return await frame.evaluate(
-            """(wantedRaw) => {
+            """({wantedRaw, expandOnly}) => {
               const norm = (s) => String(s || '').replace(/[\\s_\\-—:：]/g, '').toLowerCase();
               const stripAdmin = (s) => String(s || '').replace(/(特别行政区|自治区|省|市|区|县|自治州|地区|盟|旗)$/g, '');
               const wantedFull = norm(wantedRaw);
@@ -1147,19 +1184,20 @@ class PlaywrightFormBrowser:
                 while (n && n !== document.body) { d += 1; n = n.parentElement; }
                 return d;
               };
-              const preferredSel = ".node_name, a[treenode], [treenode_a], span.node_name, li > a, [role='treeitem'], [role='option'], .province-item, .university-item, .city-item";
+              const labelOf = (el) => {
+                if (el.matches('.node_name, span.node_name, .province-item, .university-item, .city-item, .level0, .level1, .level2')) {
+                  return String(el.textContent || '').replace(/\\s+/g, ' ').trim();
+                }
+                const clone = el.cloneNode(true);
+                clone.querySelectorAll('ul, ol, .switch, .button, input, button').forEach(x => x.remove());
+                return String(clone.innerText || clone.textContent || '').replace(/\\s+/g, ' ').trim();
+              };
+              const preferredSel = ".node_name, a[treenode], [treenode_a], span.node_name, li > a, [role='treeitem'], [role='option'], .province-item, .university-item, .city-item, .level0, .level1, .level2";
               const broadSel = preferredSel + ", a, span, td, button, [onclick]";
               const nodes = Array.from(document.querySelectorAll(broadSel)).filter(visible);
               const scored = [];
               for (const el of nodes) {
-                let text = '';
-                if (el.matches('.node_name, span.node_name, .province-item, .university-item, .city-item')) {
-                  text = String(el.textContent || '').replace(/\\s+/g, ' ').trim();
-                } else {
-                  const clone = el.cloneNode(true);
-                  clone.querySelectorAll('ul, ol, .switch, .button, input, button').forEach(x => x.remove());
-                  text = String(clone.innerText || clone.textContent || '').replace(/\\s+/g, ' ').trim();
-                }
+                const text = labelOf(el);
                 if (!text || text.length > 40) continue;
                 if (/^(确定|清除|关闭|取消|确认|提交|请选择|关键字|搜索)$/.test(text)) continue;
                 const nFull = norm(text);
@@ -1171,11 +1209,10 @@ class PlaywrightFormBrowser:
                 else if (n.startsWith(wanted) && n.length <= wanted.length + 1) score = 90;
                 else if (wanted.startsWith(n) && wanted.length <= n.length + 1) score = 88;
                 else if (wanted.length >= 3 && (n.endsWith(wanted) || nFull.endsWith(wantedFull))) score = 82;
-                // Tight contains: avoid 陕西 → 中共陕西省委党校, but allow coded majors.
                 else if (wanted.length >= 4 && n.includes(wanted) && (n.length - wanted.length) <= 10) score = 72;
                 else if (n.length >= 4 && wanted.includes(n) && (wanted.length - n.length) <= 2) score = 65;
                 if (score < 0) continue;
-                if (el.matches('.province-item, .university-item, .city-item, .node_name, span.node_name, a[treenode], [treenode_a], li > a')) score += 25;
+                if (el.matches('.province-item, .university-item, .city-item, .node_name, span.node_name, a[treenode], [treenode_a], li > a, .level0, .level1, .level2')) score += 25;
                 if (el.tagName === 'A') score += 8;
                 const childCandidates = el.querySelectorAll('.node_name, a, [role="treeitem"]').length;
                 if (childCandidates > 1) score -= 40;
@@ -1199,7 +1236,7 @@ class PlaywrightFormBrowser:
                 return {
                   ok: false,
                   error: 'not_found',
-                  available: nodes.map(n => String(n.innerText || n.textContent || '').replace(/\\s+/g,' ').trim())
+                  available: nodes.map(n => labelOf(n))
                     .filter(t => t && t.length <= 40 && !/^(确定|清除|关闭|取消|关键字|搜索)$/.test(t))
                     .slice(0, 80),
                 };
@@ -1212,7 +1249,6 @@ class PlaywrightFormBrowser:
                   finalists = [finalists.sort((a, b) => a.childCount - b.childCount || b.depth - a.depth || a.area - b.area)[0]];
                 }
               }
-              // Prefer shortest exact-ish label when still tied (省 vs 含省名的院校).
               if (finalists.length > 1) {
                 const shortest = Math.min(...finalists.map(i => i.text.length));
                 finalists = finalists.filter(i => i.text.length === shortest);
@@ -1226,12 +1262,95 @@ class PlaywrightFormBrowser:
                 };
               }
               const target = finalists[0].el;
+              const li = target.closest('li') || target.parentElement;
+              const actions = [];
+
+              // Prefer zTree API when available — click alone often only highlights parent.
+              try {
+                const jq = window.jQuery || window.$;
+                if (jq && jq.fn && jq.fn.zTree) {
+                  const trees = Array.from(document.querySelectorAll('ul.ztree, .ztree'));
+                  for (const treeEl of trees) {
+                    const treeId = treeEl.id;
+                    if (!treeId) continue;
+                    const zTree = jq.fn.zTree.getZTreeObj(treeId);
+                    if (!zTree) continue;
+                    const nodes = zTree.transformToArray(zTree.getNodes() || []);
+                    const match = nodes.find((node) => {
+                      const name = norm(stripAdmin(node.name || node.title || '')) || norm(node.name || '');
+                      return name === wanted || norm(node.name || '') === wantedFull;
+                    });
+                    if (!match) continue;
+                    if (expandOnly || match.isParent) {
+                      zTree.expandNode(match, true, false, true, true);
+                      actions.push('ztree_expand');
+                    }
+                    if (!expandOnly) {
+                      zTree.selectNode(match, false, false);
+                      if (typeof zTree.setting?.callback?.onClick === 'function') {
+                        zTree.setting.callback.onClick({}, treeId, match);
+                      }
+                      actions.push('ztree_select');
+                    }
+                    return {ok: true, text: finalists[0].text, via: actions.join('+') || 'ztree'};
+                  }
+                }
+              } catch (e) {}
+
+              const switchBtn = li && Array.from(li.querySelectorAll('span.switch, span.button.switch, .switch, span[class*="close"], span[class*="open"]'))
+                .find((node) => visible(node) && /switch|close|open|noline|center_|roots_|bottom_|root_/.test(String(node.className || '')));
+              if (expandOnly || (switchBtn && /close|noline_close|center_close|roots_close|bottom_close|root_close/.test(String(switchBtn.className || '')))) {
+                if (switchBtn) {
+                  switchBtn.click();
+                  actions.push('switch');
+                }
+              }
               const clickable = target.closest('a') || target.querySelector('a, .node_name') || target;
-              clickable.click();
-              return {ok: true, text: finalists[0].text, via: 'leaf'};
+              if (!expandOnly || !actions.includes('switch')) {
+                clickable.click();
+                actions.push('leaf');
+              } else if (expandOnly && !actions.length) {
+                clickable.dispatchEvent(new MouseEvent('dblclick', {bubbles: true, cancelable: true}));
+                clickable.click();
+                actions.push('dblclick');
+              }
+              return {ok: true, text: finalists[0].text, via: actions.join('+') || 'leaf'};
             }""",
-            wanted_raw,
+            {"wantedRaw": wanted_raw, "expandOnly": bool(expand)},
         )
+
+    async def _wait_for_cascade_child(
+        self,
+        frame: Any,
+        *,
+        next_value: Any,
+        before: list[str],
+        parent_value: Any,
+        timeout_ms: int = 3500,
+    ) -> Any:
+        """Wait until city/district options appear after expanding a province/city."""
+        deadline = time.time() + max(0.8, timeout_ms / 1000)
+        nxt = frame
+        attempts = 0
+        while time.time() < deadline:
+            refreshed = await self._wait_for_layui_iframe_ready(min_options=1, timeout_ms=400)
+            if refreshed is not None:
+                nxt = refreshed
+            texts = await self._list_frame_option_texts(nxt)
+            if await self._frame_has_option(nxt, next_value):
+                return nxt
+            # Options changed away from the previous province-only list.
+            if texts and set(texts) != set(before) and not await self._frame_has_option(nxt, parent_value):
+                return nxt
+            attempts += 1
+            if attempts in {2, 4}:
+                # Retry expand if the first click only highlighted the parent.
+                try:
+                    await self._click_text_in_frame(nxt, parent_value, expand=True)
+                except Exception:
+                    pass
+            await self._pause(180)
+        return nxt
 
     async def _confirm_top_layui_layer(self) -> bool:
         if self.page is None:
@@ -1540,12 +1659,15 @@ class PlaywrightFormBrowser:
         if not opened["ok"]:
             return opened
 
-        # Tongji area/school pickers render inside a layui iframe — wait for options to hydrate.
+        # Tongji/Fudan area/school pickers render inside a layui iframe — wait for options to hydrate.
         frame = await self._wait_for_layui_iframe_ready()
         selected_labels: list[str] = []
         if frame is not None:
             for level, raw_value in enumerate(path):
-                clicked = await self._click_text_in_frame(frame, raw_value)
+                is_last = level >= len(path) - 1
+                before = await self._list_frame_option_texts(frame)
+                # Intermediate levels must expand the tree; leaf levels select the node.
+                clicked = await self._click_text_in_frame(frame, raw_value, expand=not is_last)
                 if not clicked.get("ok"):
                     return {
                         "ok": False,
@@ -1554,15 +1676,45 @@ class PlaywrightFormBrowser:
                         "level": level,
                         "wanted": str(raw_value),
                         "candidate_count": clicked.get("candidate_count") or 0,
-                        "available_options": (clicked.get("available") or [])[:100],
+                        "available_options": (clicked.get("available") or before)[:100],
                         "field_id": field_id,
                     }
                 selected_labels.append(str(clicked.get("text") or raw_value))
-                await self._pause(350)
-                # Some pickers navigate iframe content; refresh frame handle each level.
-                nxt = await self._wait_for_layui_iframe_ready(min_options=1, timeout_ms=2500)
-                if nxt is not None:
-                    frame = nxt
+                await self._pause(280)
+                if is_last:
+                    nxt = await self._wait_for_layui_iframe_ready(min_options=1, timeout_ms=1200)
+                    if nxt is not None:
+                        frame = nxt
+                else:
+                    frame = await self._wait_for_cascade_child(
+                        frame,
+                        next_value=path[level + 1],
+                        before=before,
+                        parent_value=raw_value,
+                        timeout_ms=4000,
+                    )
+                    if not await self._frame_has_option(frame, path[level + 1]):
+                        # One more expand+click cycle before giving up.
+                        await self._click_text_in_frame(frame, raw_value, expand=True)
+                        frame = await self._wait_for_cascade_child(
+                            frame,
+                            next_value=path[level + 1],
+                            before=before,
+                            parent_value=raw_value,
+                            timeout_ms=2500,
+                        )
+                    if not await self._frame_has_option(frame, path[level + 1]):
+                        return {
+                            "ok": False,
+                            "error": "展开上级后未出现下一级选项",
+                            "mode": "layui_iframe",
+                            "level": level,
+                            "wanted": str(path[level + 1]),
+                            "parent": str(raw_value),
+                            "via": clicked.get("via"),
+                            "available_options": (await self._list_frame_option_texts(frame))[:100],
+                            "field_id": field_id,
+                        }
             confirmed = await self._confirm_top_layui_layer()
             await self._pause(350)
             snapshot = await self.inspect()
