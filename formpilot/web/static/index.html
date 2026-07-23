@@ -68,6 +68,17 @@
           <span>目标 URL</span>
           <input id="runUrl" type="url" placeholder="https://yzbm.tongji.edu.cn/..." />
         </label>
+        <div class="field-row login-row">
+          <label class="field">
+            <span>报考网站账号</span>
+            <input id="cfgLoginUser" type="text" autocomplete="username" placeholder="用户名 / 学号 / 证件号" />
+          </label>
+          <label class="field">
+            <span>报考网站密码</span>
+            <input id="cfgLoginPass" type="password" autocomplete="current-password" placeholder="登录密码" />
+          </label>
+        </div>
+        <p class="field-note">写入本地 <code>.env</code>（FORMPILOT_LOGIN_*），仅用于自动登录，不会发给决策模型。</p>
         <label class="field">
           <span>补充指引（每行一条，可选）</span>
           <textarea id="runGuidance" rows="2" placeholder="有专硕优先选专硕"></textarea>

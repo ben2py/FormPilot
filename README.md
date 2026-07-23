@@ -76,11 +76,11 @@ FORMPILOT_WEB_HOST=127.0.0.1 FORMPILOT_WEB_PORT=8787 formpilot-web
 
 **Console flow**
 
-1. Under **模型 API**, set the decision model (`OPENAI_*` / `FORMPILOT_MODEL`) and optional vision API (`FORMPILOT_VISION_*`) → Save  
-2. Fill **填写资料** (identity, education, family, document paths, …) → Save  
-3. Write / edit **任务说明** in natural language → Save  
-4. Paste the target application URL → **开始填表**  
-5. When the agent needs you (login SMS, confirm, missing field), a modal appears in the console  
+1. Paste the target URL and fill **报考网站账号 / 密码** (saved to `.env` as `FORMPILOT_LOGIN_*`)  
+2. Under **API 配置**, set the decision model and optional vision API → Save  
+3. Fill **报名资料** and **任务说明** → Save  
+4. Click **开始填表**  
+5. When the agent needs you (SMS, confirm, missing field), a modal appears in the console  
 
 Run traces still land in `.formpilot/logs/run-*.jsonl`.
 

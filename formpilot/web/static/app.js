@@ -177,9 +177,12 @@ function applySettingsForm(settings) {
   $("cfgVisionKey").value = settings.vision_api_key || "";
   $("cfgVisionBase").value = settings.vision_base_url || "";
   $("cfgVisionModel").value = settings.vision_model || "";
+  $("cfgLoginUser").value = settings.login_username || "";
+  $("cfgLoginPass").value = settings.login_password || "";
   $("modelPill").textContent = settings.model || "model";
   const visionPill = settings.vision_model ? ` · ${settings.vision_model}` : "";
-  $("modelPill").title = `决策: ${settings.model || "-"}${visionPill}`;
+  const loginNote = settings.has_login ? " · login ok" : " · no login";
+  $("modelPill").title = `决策: ${settings.model || "-"}${visionPill}${loginNote}`;
   setStatus(settings.has_api_key ? "Idle" : "Missing API key", settings.has_api_key ? "" : "error");
 }
 
@@ -193,6 +196,8 @@ function collectSettingsBody() {
     vision_api_key: $("cfgVisionKey").value.trim(),
     vision_base_url: $("cfgVisionBase").value.trim(),
     vision_model: $("cfgVisionModel").value.trim(),
+    login_username: $("cfgLoginUser").value.trim(),
+    login_password: $("cfgLoginPass").value,
   };
 }
 
@@ -333,7 +338,7 @@ $("saveSettings").addEventListener("click", async () => {
       body: JSON.stringify(collectSettingsBody()),
     });
     applySettingsForm(settings);
-    toast(settings.has_api_key ? "API 配置已保存到 .env" : "已保存，但仍缺少 OPENAI_API_KEY");
+    toast(settings.has_api_key ? "配置已保存到 .env" : "已保存，但仍缺少 OPENAI_API_KEY");
   } catch (err) {
     toast(err.message);
   }
@@ -342,7 +347,7 @@ $("saveSettings").addEventListener("click", async () => {
 $("reloadSettings").addEventListener("click", async () => {
   try {
     applySettingsForm(await api("/api/settings"));
-    toast("API 配置已重新加载");
+    toast("配置已重新加载");
   } catch (err) {
     toast(err.message);
   }
@@ -376,6 +381,7 @@ $("startRun").addEventListener("click", async () => {
   try {
     await api("/api/profile", { method: "PUT", body: JSON.stringify({ profile: profileState }) });
     await api("/api/task", { method: "PUT", body: JSON.stringify({ content: $("taskEditor").value }) });
+    await api("/api/settings", { method: "PUT", body: JSON.stringify(collectSettingsBody()) });
     const body = {
       url: $("runUrl").value.trim(),
       guidance: collectGuidance(),

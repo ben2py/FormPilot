@@ -287,6 +287,19 @@ body {
   color: var(--muted);
   font-size: 0.84rem;
 }
+.field-note {
+  margin: -0.15rem 0 0.55rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+.field-note code {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  background: #eef3f7;
+  padding: 0.05rem 0.3rem;
+}
+.login-row { margin-bottom: 0.15rem; }
 
 .run-box, .log-box, .api-drawer {
   border: 1px solid var(--line);

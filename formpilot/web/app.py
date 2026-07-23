@@ -64,6 +64,8 @@ SETTINGS_KEYS = (
     "FORMPILOT_VISION_MODEL",
     "FORMPILOT_VISION_BASE_URL",
     "FORMPILOT_VISION_API_KEY",
+    "FORMPILOT_LOGIN_USERNAME",
+    "FORMPILOT_LOGIN_PASSWORD",
 )
 
 
@@ -76,11 +78,15 @@ class SettingsUpdate(BaseModel):
     vision_model: str | None = None
     vision_base_url: str | None = None
     vision_api_key: str | None = None
+    login_username: str | None = None
+    login_password: str | None = None
 
 
 def _settings_payload() -> dict[str, Any]:
     config = AgentConfig.from_env()
     vision_key = os.getenv("FORMPILOT_VISION_API_KEY") or os.getenv("DASHSCOPE_API_KEY") or ""
+    login_username = os.getenv("FORMPILOT_LOGIN_USERNAME", "")
+    login_password = os.getenv("FORMPILOT_LOGIN_PASSWORD", "")
     return {
         "ok": True,
         "env_path": str(ENV_PATH),
@@ -95,6 +101,9 @@ def _settings_payload() -> dict[str, Any]:
         "vision_base_url": os.getenv("FORMPILOT_VISION_BASE_URL", ""),
         "vision_api_key": vision_key,
         "has_vision_api_key": bool(vision_key),
+        "login_username": login_username,
+        "login_password": login_password,
+        "has_login": bool(login_username and login_password),
         "fast": os.getenv("FORMPILOT_FAST", ""),
         "auto_approve": os.getenv("FORMPILOT_AUTO_APPROVE", ""),
         "profile_path": str(PROFILE_PATH),
@@ -164,7 +173,7 @@ async def get_settings() -> dict[str, Any]:
 @app.put("/api/settings")
 async def put_settings(body: SettingsUpdate) -> dict[str, Any]:
     if _run_lock.locked() or (_run_task and not _run_task.done()):
-        raise HTTPException(409, "任务运行中，请先停止再改 API 配置")
+        raise HTTPException(409, "任务运行中，请先停止再改配置")
 
     mapping = {
         "OPENAI_API_KEY": body.openai_api_key,
@@ -175,6 +184,8 @@ async def put_settings(body: SettingsUpdate) -> dict[str, Any]:
         "FORMPILOT_VISION_MODEL": body.vision_model,
         "FORMPILOT_VISION_BASE_URL": body.vision_base_url,
         "FORMPILOT_VISION_API_KEY": body.vision_api_key,
+        "FORMPILOT_LOGIN_USERNAME": body.login_username,
+        "FORMPILOT_LOGIN_PASSWORD": body.login_password,
     }
     updates = {key: value.strip() if isinstance(value, str) else "" for key, value in mapping.items() if value is not None}
     if not updates:
