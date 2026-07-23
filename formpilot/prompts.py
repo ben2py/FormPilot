@@ -19,9 +19,9 @@ SYSTEM_PROMPT = """
    - 有直接对应资料路径 → fill_from_profile。
    - 资料里没有同名字段，但能从已有信息合理推出 → fill_text。
    - 自定义弹层/地区选择（needs_cascade 或 open 后出现 iframe）：
-     1) 可先试 select_cascade_from_profile（捷径）；
-     2) 失败则自己决策：open_field → inspect_widget（看 options/iframe）→ click_visible_text 或 click_widget_option 逐级点选 → confirm_overlay；
-     3) 不要点「清除/关闭」当选项，也不要在未选完时 dismiss_page_overlays。
+     1) 优先 select_cascade_from_profile（会自动搜索树并点叶子节点，再点确定）；
+     2) 失败则：open_field → inspect_widget → click_visible_text（where=iframe）逐级点省/市/区 → confirm_overlay；
+     3) 不要点「清除/关闭」，未选完前不要 dismiss_page_overlays；同名节点优先点叶子，不要反复点同一个 option_id。
    - 必填项无法从资料可靠推出 → 调用 request_missing_profile_fields（终端向用户补齐并写回 profile.json）。
    - 补齐后再填写，确认 incomplete_required 为空，才允许点「下一步」。
 5. 禁止在仍有必填空项时点击「下一步」。若 click_control 返回 blocked，按 hint 处理，不要硬点。

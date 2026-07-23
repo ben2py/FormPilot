@@ -263,8 +263,9 @@ class FormPilotTools:
             "controls": widget["controls"][:200],
             "iframe": widget.get("iframe"),
             "hint": (
-                "若 options 含 source=iframe，说明地区/树选项在弹层 iframe 内；"
-                "可用 click_visible_text / click_widget_option 点选，再用 confirm_overlay 点确定。"
+                "若 options 含 source=iframe，地区树在弹层 iframe 内。"
+                "优先 select_cascade_from_profile；或 click_visible_text（会先用关键字搜索再点叶子节点），"
+                "选完后 confirm_overlay。未选完前不要 dismiss_page_overlays。"
             ),
         }
 

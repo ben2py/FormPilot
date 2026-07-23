@@ -328,16 +328,27 @@ IFRAME_OPTION_SCAN_SCRIPT = r"""
     }
     return el.dataset.formpilotId;
   };
-  const optionSelector = "a, li, td, span, div, label, button, [onclick], [role='option'], [role='treeitem']";
-  const nodes = Array.from(document.querySelectorAll(optionSelector)).filter(visible);
+  // Prefer real tree leaves (ztree node_name / anchors), not wrapper li/div with same label.
+  const preferred = Array.from(document.querySelectorAll(
+    ".node_name, a[treenode], [treenode_a], span.node_name, li a, [role='treeitem'], [role='option']"
+  )).filter(visible);
+  const fallback = Array.from(document.querySelectorAll(
+    "a, li, td, span, button, [onclick]"
+  )).filter(visible);
+  const seen = new Set();
   const options = [];
-  for (const el of nodes) {
-    const text = compact(el.innerText || el.textContent, 80);
-    if (!text || text.length > 24) continue;
-    if (/^(确定|清除|关闭|取消|确认|提交|请选择)$/.test(text)) continue;
-    const nested = el.querySelectorAll(optionSelector).length;
-    if (nested > 2) continue;
+  const push = (el) => {
+    if (seen.has(el)) return;
+    const text = compact(el.innerText || el.textContent, 40);
+    if (!text || text.length > 20) return;
+    if (/^(确定|清除|关闭|取消|确认|提交|请选择|关键字|搜索)$/.test(text)) return;
+    if (/关键字|搜索/.test(text) && text.length <= 8) return;
+    // Skip wrappers that still contain other candidate leaves with same visible text.
+    const nestedLeaves = el.querySelectorAll(".node_name, a, [role='treeitem']");
+    if (nestedLeaves.length > 1) return;
     const className = typeof el.className === "string" ? el.className : "";
+    if (/treeSearchInput|search/i.test(className) && el.tagName === "INPUT") return;
+    seen.add(el);
     options.push({
       option_id: idFor(el, "iframe-option"),
       text,
@@ -347,10 +358,19 @@ IFRAME_OPTION_SCAN_SCRIPT = r"""
       source: "iframe",
       disabled: el.getAttribute("aria-disabled") === "true" || /disabled/.test(className),
     });
-    if (options.length >= 400) break;
-  }
+  };
+  preferred.forEach(push);
+  if (options.length < 20) fallback.forEach(push);
+  const search = document.querySelector(
+    "input.treeSearchInput, input[class*='earch' i], input[placeholder*='关键字'], input[placeholder*='搜索'], #key, #keyword"
+  );
   document.documentElement.dataset.formpilotSequence = String(sequence);
-  return {options, url: location.href, title: document.title};
+  return {
+    options: options.slice(0, 400),
+    url: location.href,
+    title: document.title,
+    has_search: Boolean(search),
+  };
 }
 """
 
@@ -892,6 +912,7 @@ class PlaywrightFormBrowser:
                     "url": iframe_scan.get("url"),
                     "title": iframe_scan.get("title"),
                     "option_count": len(iframe_scan.get("options") or []),
+                    "has_search": bool(iframe_scan.get("has_search")),
                 }
                 for item in iframe_scan.get("options") or []:
                     item = dict(item)
@@ -915,7 +936,46 @@ class PlaywrightFormBrowser:
             "iframe": iframe_meta,
         }
 
+    async def _search_in_frame(self, frame: Any, query: str) -> dict[str, Any]:
+        """Use the area-tree keyword box when present (Tongji layui iframe)."""
+        return await frame.evaluate(
+            """(q) => {
+              const input = document.querySelector(
+                "input.treeSearchInput, input[class*='earch' i], input[placeholder*='关键字'], input[placeholder*='搜索'], #key, #keyword, input[type='text']"
+              );
+              if (!input || !input.getClientRects().length) return {ok: false, reason: 'no_search'};
+              input.focus();
+              input.value = '';
+              input.dispatchEvent(new Event('input', {bubbles: true}));
+              input.value = String(q || '');
+              input.dispatchEvent(new Event('input', {bubbles: true}));
+              input.dispatchEvent(new Event('change', {bubbles: true}));
+              const parent = input.parentElement || document.body;
+              const btn = Array.from(parent.querySelectorAll('a, button, input[type="button"], span, div'))
+                .find(node => /搜索|查询|search/i.test(`${node.innerText || ''} ${node.value || ''} ${node.className || ''}`));
+              if (btn) {
+                btn.click();
+                return {ok: true, via: 'button'};
+              }
+              input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+              input.dispatchEvent(new KeyboardEvent('keyup', {key: 'Enter', bubbles: true}));
+              if (typeof input.form?.requestSubmit === 'function') {
+                try { input.form.requestSubmit(); } catch (e) {}
+              }
+              return {ok: true, via: 'enter'};
+            }""",
+            str(query),
+        )
+
     async def _click_text_in_frame(self, frame: Any, raw_value: Any) -> dict[str, Any]:
+        # Prefer filtering the tree via search box to avoid duplicate wrapper nodes.
+        try:
+            searched = await self._search_in_frame(frame, str(raw_value))
+        except Exception:
+            searched = {"ok": False}
+        if searched.get("ok"):
+            await self.page.wait_for_timeout(450)
+
         return await frame.evaluate(
             """(wantedRaw) => {
               const norm = (s) => String(s || '').replace(/[\\s_\\-—:：省市区县]/g, '').toLowerCase();
@@ -925,42 +985,85 @@ class PlaywrightFormBrowser:
                 const s = getComputedStyle(el);
                 return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.getClientRects().length > 0;
               };
-              const nodes = Array.from(document.querySelectorAll(
-                "a, li, td, span, div, label, button, [onclick], [role='option'], [role='treeitem']"
-              )).filter(visible);
+              const depthOf = (el) => {
+                let d = 0; let n = el;
+                while (n && n !== document.body) { d += 1; n = n.parentElement; }
+                return d;
+              };
+              const preferredSel = ".node_name, a[treenode], [treenode_a], span.node_name, li > a, [role='treeitem'], [role='option']";
+              const broadSel = preferredSel + ", a, span, td, button, [onclick]";
+              const nodes = Array.from(document.querySelectorAll(broadSel)).filter(visible);
               const scored = [];
               for (const el of nodes) {
-                const text = String(el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                // Own text only for leaves: avoid li that concatenates children labels.
+                let text = '';
+                if (el.matches('.node_name, span.node_name')) {
+                  text = String(el.textContent || '').replace(/\\s+/g, ' ').trim();
+                } else {
+                  const clone = el.cloneNode(true);
+                  clone.querySelectorAll('ul, ol, .switch, .button, input, button').forEach(x => x.remove());
+                  text = String(clone.innerText || clone.textContent || '').replace(/\\s+/g, ' ').trim();
+                }
                 if (!text || text.length > 24) continue;
-                if (/^(确定|清除|关闭|取消|确认|提交|请选择)$/.test(text)) continue;
-                if (el.querySelectorAll('a, li, td').length > 3) continue;
+                if (/^(确定|清除|关闭|取消|确认|提交|请选择|关键字|搜索)$/.test(text)) continue;
                 const n = norm(text);
                 if (!n) continue;
                 let score = -1;
                 if (n === wanted) score = 100;
                 else if (n.includes(wanted) || wanted.includes(n)) score = 70 - Math.abs(n.length - wanted.length);
                 if (score < 0) continue;
-                scored.push({el, text, score});
+                // Prefer true tree leaves / anchors over wrappers.
+                if (el.matches('.node_name, span.node_name, a[treenode], [treenode_a], li > a')) score += 25;
+                if (el.tagName === 'A') score += 8;
+                const childCandidates = el.querySelectorAll('.node_name, a, [role="treeitem"]').length;
+                if (childCandidates > 1) score -= 40;
+                scored.push({
+                  el,
+                  text,
+                  score,
+                  depth: depthOf(el),
+                  childCount: childCandidates,
+                  area: (() => { const r = el.getBoundingClientRect(); return r.width * r.height; })(),
+                });
               }
-              scored.sort((a, b) => b.score - a.score || a.text.length - b.text.length);
+              scored.sort((a, b) =>
+                b.score - a.score
+                || a.childCount - b.childCount
+                || b.depth - a.depth
+                || a.area - b.area
+                || a.text.length - b.text.length
+              );
               if (!scored.length) {
                 return {
                   ok: false,
                   error: 'not_found',
                   available: nodes.map(n => String(n.innerText || n.textContent || '').replace(/\\s+/g,' ').trim())
-                    .filter(t => t && t.length <= 24 && !/^(确定|清除|关闭|取消)$/.test(t))
+                    .filter(t => t && t.length <= 24 && !/^(确定|清除|关闭|取消|关键字|搜索)$/.test(t))
                     .slice(0, 80),
                 };
               }
               const bestScore = scored[0].score;
-              const top = scored.filter(item => item.score === bestScore);
-              const shortest = Math.min(...top.map(item => item.text.length));
-              const finalists = top.filter(item => item.text.length === shortest);
-              if (finalists.length !== 1) {
-                return {ok: false, error: 'ambiguous', candidate_count: finalists.length, available: finalists.map(i => i.text)};
+              let finalists = scored.filter(item => item.score === bestScore);
+              // Same label duplicated on wrapper+leaf: pick the deepest leaf.
+              if (finalists.length > 1) {
+                const same = finalists.every(item => norm(item.text) === norm(finalists[0].text));
+                if (same) {
+                  finalists = [finalists.sort((a, b) => a.childCount - b.childCount || b.depth - a.depth || a.area - b.area)[0]];
+                }
               }
-              finalists[0].el.click();
-              return {ok: true, text: finalists[0].text};
+              if (finalists.length !== 1) {
+                return {
+                  ok: false,
+                  error: 'ambiguous',
+                  candidate_count: finalists.length,
+                  available: finalists.map(i => i.text),
+                };
+              }
+              const target = finalists[0].el;
+              // Click the anchor/node_name if present inside.
+              const clickable = target.closest('a') || target.querySelector('a, .node_name') || target;
+              clickable.click();
+              return {ok: true, text: finalists[0].text, via: 'leaf'};
             }""",
             str(raw_value),
         )
